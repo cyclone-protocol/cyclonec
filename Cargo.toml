@@ -1,0 +1,31 @@
+[package]
+name = "cyclonec"
+version = "0.1.0"
+edition = "2021"
+description = "The official Cyclone source generator: reads Cyclone attributes and writes Encode/Decode calls. Not a compiler, not a runtime."
+license = "Apache-2.0"
+keywords = ["cyclone", "codegen", "source-generator", "codec", "binary"]
+categories = ["development-tools", "command-line-utilities"]
+readme = "README.md"
+repository = "https://github.com/cyclone-protocol/cyclonec"
+homepage = "https://cyclone-protocol.github.io"
+
+[[bin]]
+name = "cyclonec"
+path = "src/main.rs"
+
+# No dependencies, and none are wanted. `cyclonec` does not parse Rust — it
+# looks for four markers and writes call sites — so a full syntax library would
+# cost startup time and buy nothing. See `parser.rs`.
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Test-only. The fixture is annotated source, so the test crate needs the
+# attributes to compile it. `cyclonec` itself depends on nothing.
+[dev-dependencies]
+cyclone-attributes = "0.1.0"
