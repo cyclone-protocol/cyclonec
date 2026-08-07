@@ -1,4 +1,4 @@
-//! [`Model`]s → source.
+//! [`Model`]s → Rust source.
 //!
 //! There is no pass here. A model is walked once, a codec at a time, a field at
 //! a time, and each field appends one line. Nothing is analysed on the way: the
@@ -20,12 +20,12 @@
 //! reached at runtime. A codec is a name known at compile time, and the caller
 //! names it directly.
 //!
-//! # Other languages
+//! # This is one of two backends
 //!
-//! The seam for C# or Go is [`render`] and [`PRIMITIVES`] — a second table and a
-//! second set of `push_str` calls, in this file. It is not worth a trait, a
-//! registry of backends, or a directory of modules until there is a second one
-//! to compare against.
+//! [`super::csharp`] is the other. Both read the same [`Model`], produce the
+//! same codec names for the same schema (see [`crate::model::pascal_case`]),
+//! and differ only in the syntax and the runtime method names they write — see
+//! that module's header for the shared contract.
 
 use crate::model::{pascal_case, Field, Model};
 
@@ -55,6 +55,9 @@ const PRIMITIVES: &[(&str, &str, &str, bool)] = &[
 
 /// The name of the generated file when the output path names a directory.
 pub const DEFAULT_FILE_NAME: &str = "cyclone.codec.rs";
+
+/// The suffix a Rust output path is recognised by.
+pub const EXTENSION: &str = "rs";
 
 /// Renders one self-contained file: the runtime, then every codec every model
 /// declared.
@@ -90,7 +93,7 @@ pub fn render(sources: &[String], models: &[Model], file_name: &str) -> Option<S
     out.push_str("//\n");
     out.push_str(&format!("//     include!(\"{file_name}\");\n"));
 
-    out.push_str(crate::runtime::RUNTIME);
+    out.push_str(super::rust_runtime::RUNTIME);
 
     out.push_str("\n// ==========================================================================\n");
     out.push_str("// Codecs — one per codec each model declared, in declaration order.\n");

@@ -11,21 +11,29 @@ use std::path::PathBuf;
 pub const USAGE: &str = "\
 cyclonec — the official Cyclone source generator
 
-Reads Cyclone attributes from Rust sources and writes one self-contained file
-holding the Cyclone runtime and every codec the models declared. Nothing to
-import, nothing to add to Cargo.toml.
+Reads Cyclone attributes from Rust and C# sources and writes one
+self-contained file per language, holding that language's Cyclone runtime and
+every codec the models declared. Nothing to import, nothing to add to
+Cargo.toml or your .csproj.
 
 USAGE:
     cyclonec --out <PATH> [OPTIONS] <PATH>...
 
 ARGS:
-    <PATH>...    Files, or directories to search recursively for `.rs` files
+    <PATH>...    Files, or directories to search recursively for `.rs` and
+                 `.cs` files. Each file's own extension picks its scanner —
+                 Rust's `#[network]` for `.rs`, C#'s `[Network]` for `.cs`.
 
 OPTIONS:
     -o, --out <PATH>   Where to write. Required.
-                         a path ending in `.rs`  →  that exact file
+                         a path ending in `.rs`  →  Rust's exact file
+                         a path ending in `.cs`  →  C#'s exact file
                          anything else           →  a directory, holding
-                                                    `cyclone.codec.rs`
+                                                    `cyclone.codec.rs` and/or
+                                                    `cyclone.codec.cs`
+                       If sources in the language the extension did not pick
+                       are also found, their output lands beside it (the
+                       same path with the other extension).
         --check        Report an out-of-date output file without writing;
                        exit 1 if it is stale. For CI.
         --stdout       Print the generated code instead of writing it.
@@ -35,11 +43,11 @@ OPTIONS:
     -V, --version      Print the version
 
 EXAMPLES:
-    cyclonec --out src/ src/                  → src/cyclone.codec.rs
+    cyclonec --out src/ src/                  → src/cyclone.codec.rs and/or .cs
     cyclonec --out src/net.rs src/models.rs   → src/net.rs
     cyclonec --stdout src/                    → stdout
 
-A model declares which codecs to generate; there is no flag for it:
+A model declares which codecs to generate; there is no flag for it. Rust:
 
     #[network]
     #[codec(edge, unity)]        →  DeviceStateEdgeCodec, DeviceStateUnityCodec
@@ -51,6 +59,22 @@ A model declares which codecs to generate; there is no flag for it:
         #[network(f32)]
         #[codec(edge)]           →  in the edge codec only
         temperature: f32,
+    }
+
+The same schema, in C# (from the `cyclone-attributes` package, namespace
+`Cyclone`) — same codecs, same routing, same bytes on the wire:
+
+    [Network]
+    [Codec(\"edge\", \"unity\")]
+    public class DeviceState
+    {
+        [Network(\"u32\")]
+        [Codec(\"edge\", \"unity\")]
+        public uint Id { get; set; }
+
+        [Network(\"f32\")]
+        [Codec(\"edge\")]
+        public float Temperature { get; set; }
     }
 ";
 

@@ -33,6 +33,23 @@ fn generate(name: &str, source: &str) -> (Output, Option<String>) {
     (output, generated)
 }
 
+/// The C# counterpart of [`generate`]: writes `source` as `{name}.cs` and
+/// reads back `cyclone.codec.cs`.
+fn generate_csharp(name: &str, source: &str) -> (Output, Option<String>) {
+    let directory = scratch(name);
+    let input = directory.join(format!("{name}.cs"));
+    std::fs::write(&input, source).expect("write source");
+
+    let output = cyclonec(&[
+        "--out",
+        directory.to_str().expect("utf-8 path"),
+        input.to_str().expect("utf-8 path"),
+    ]);
+    let generated = std::fs::read_to_string(directory.join("cyclone.codec.cs")).ok();
+
+    (output, generated)
+}
+
 /// A clean directory under `target/`, so tests never see each other's files.
 fn scratch(name: &str) -> PathBuf {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests").join(name);
@@ -497,4 +514,448 @@ fn the_output_carries_the_runtime() {
     // Carried, not derived: no `use` of a runtime crate, and nothing to add to
     // Cargo.toml.
     assert!(!generated.contains("use cyclone"), "{generated}");
+}
+
+// ================================================================= C# — §18
+
+/// §18 "Basic model" — `[Network] [Codec("edge")]` on a class with one field
+/// produces exactly `PlayerEdgeCodec`.
+#[test]
+fn csharp_basic_model() {
+    let (output, generated) = generate_csharp(
+        "basic",
+        r#"
+        using Cyclone;
+
+        [Network]
+        [Codec("edge")]
+        public class Player
+        {
+            [Network("u32")]
+            [Codec("edge")]
+            public uint Id { get; set; }
+        }
+        "#,
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    assert!(generated.contains("public static class PlayerEdgeCodec"));
+    assert!(generated.contains("writer.WriteUInt32(value.Id);"));
+    assert_eq!(generated.matches("Codec\n").count(), 1);
+}
+
+/// §18 "Multiple codecs" — `edge` carries `Id` and `Health`; `unity` carries
+/// `Id` and `Name`. Verbatim from the brief.
+#[test]
+fn csharp_multiple_codecs() {
+    let (output, generated) = generate_csharp(
+        "multiple",
+        r#"
+        using Cyclone;
+
+        [Network]
+        [Codec("edge", "unity")]
+        public class Player
+        {
+            [Network("u32")]
+            [Codec("edge", "unity")]
+            public uint Id { get; set; }
+
+            [Network("f32")]
+            [Codec("edge")]
+            public float Health { get; set; }
+
+            [Network("string")]
+            [Codec("unity")]
+            public string Name { get; set; } = string.Empty;
+        }
+        "#,
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    let edge = extract_method(&generated, "PlayerEdgeCodec", "Encode");
+    assert!(edge.contains("value.Id"));
+    assert!(edge.contains("value.Health"));
+    assert!(!edge.contains("value.Name"));
+
+    let unity = extract_method(&generated, "PlayerUnityCodec", "Encode");
+    assert!(unity.contains("value.Id"));
+    assert!(unity.contains("value.Name"));
+    assert!(!unity.contains("value.Health"));
+}
+
+/// §18 "Custom codec" — an identifier the generator has never heard of works
+/// exactly like `edge` or `unity`.
+#[test]
+fn csharp_custom_codec_names_need_no_registration() {
+    let (output, generated) = generate_csharp(
+        "custom",
+        r#"
+        using Cyclone;
+
+        [Network]
+        [Codec("orange_pi", "custom_protocol")]
+        public class Player
+        {
+            [Network("u32")]
+            [Codec("orange_pi", "custom_protocol")]
+            public uint Id { get; set; }
+        }
+        "#,
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    assert!(generated.contains("PlayerOrangePiCodec"));
+    assert!(generated.contains("PlayerCustomProtocolCodec"));
+}
+
+/// §18's exact native-type-independence case, and the reason it lives here
+/// rather than in the compiled `tests/csharp/` fixture: `[Network("u32")]` on
+/// a `ulong` reports wire type `u32` — not `u64` — in the generator's own
+/// output, whether or not a C# compiler would accept the mismatch (h.md §2
+/// leaves that question to the C# compiler, not to `cyclonec`).
+#[test]
+fn csharp_native_type_does_not_change_the_wire_type() {
+    let (output, generated) = generate_csharp(
+        "native_type",
+        r#"
+        using Cyclone;
+
+        [Network]
+        [Codec("edge")]
+        public class Reading
+        {
+            [Network("u32")]
+            [Codec("edge")]
+            public ulong Value { get; set; }
+        }
+        "#,
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    // u32, not u64: WriteUInt32/ReadUInt32, never WriteUInt64/ReadUInt64. The
+    // runtime block always defines ReadUInt64 (every primitive method lives
+    // there unconditionally), so the codec body — not the whole file — is what
+    // has to be free of it.
+    assert!(generated.contains("writer.WriteUInt32(value.Value);"), "{generated}");
+    assert!(generated.contains("value.Value = reader.ReadUInt32();"), "{generated}");
+
+    let codec = extract_method(&generated, "ReadingEdgeCodec", "Encode");
+    assert!(!codec.contains("WriteUInt64"), "{codec}");
+    let decode = extract_method(&generated, "ReadingEdgeCodec", "Decode");
+    assert!(!decode.contains("ReadUInt64"), "{decode}");
+}
+
+// ============================================================ C# — parity
+
+/// The two scanners reach the same [`cyclone_cli`-style] shape for the same
+/// schema: same codec names, same field routing. (`cyclonec` has no library
+/// target, so this compares generated *text* rather than the IR directly —
+/// the same black-box guarantee a user gets.)
+#[test]
+fn csharp_and_rust_agree_on_codec_names_for_the_same_schema() {
+    let (_, rust) = generate(
+        "parity_rust",
+        r#"
+        #[network]
+        #[codec(edge, unity)]
+        struct DeviceState {
+            #[network(u32)]
+            #[codec(edge, unity)]
+            id: u32,
+            #[network(f32)]
+            #[codec(edge)]
+            temperature: f32,
+        }
+        "#,
+    );
+    let (_, csharp) = generate_csharp(
+        "parity_csharp",
+        r#"
+        using Cyclone;
+
+        [Network]
+        [Codec("edge", "unity")]
+        public class DeviceState
+        {
+            [Network("u32")]
+            [Codec("edge", "unity")]
+            public uint Id { get; set; }
+
+            [Network("f32")]
+            [Codec("edge")]
+            public float Temperature { get; set; }
+        }
+        "#,
+    );
+
+    let rust = rust.expect("a codec file");
+    let csharp = csharp.expect("a codec file");
+
+    for name in ["DeviceStateEdgeCodec", "DeviceStateUnityCodec"] {
+        assert!(rust.contains(name), "{name} missing from Rust output");
+        assert!(csharp.contains(name), "{name} missing from C# output");
+    }
+
+    // The unity codec carries id but not temperature, on both sides.
+    assert!(!extract_fn(&rust, "DeviceStateUnityCodec", "encode").contains("temperature"));
+    assert!(!extract_method(&csharp, "DeviceStateUnityCodec", "Encode").contains("Temperature"));
+}
+
+/// A directory holding both `.rs` and `.cs` sources produces both output
+/// files, each holding only its own language's models.
+#[test]
+fn a_directory_with_both_languages_produces_both_outputs() {
+    let directory = scratch("both_languages");
+    std::fs::write(
+        directory.join("a.rs"),
+        "#[network] #[codec(edge)] struct A { #[network(u32)] #[codec(edge)] a: u32, }",
+    )
+    .expect("write source");
+    std::fs::write(
+        directory.join("b.cs"),
+        r#"using Cyclone;
+        [Network] [Codec("edge")]
+        public class B { [Network("u32")] [Codec("edge")] public uint Value { get; set; } }
+        "#,
+    )
+    .expect("write source");
+
+    let path = directory.to_str().expect("utf-8 path");
+    let output = cyclonec(&["--out", path, path]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let rust = std::fs::read_to_string(directory.join("cyclone.codec.rs")).expect("read rust");
+    let csharp = std::fs::read_to_string(directory.join("cyclone.codec.cs")).expect("read csharp");
+
+    assert!(rust.contains("AEdgeCodec"));
+    assert!(!rust.contains("BEdgeCodec"), "the Rust file must not carry C# models");
+    assert!(csharp.contains("BEdgeCodec"));
+    assert!(!csharp.contains("AEdgeCodec"), "the C# file must not carry Rust models");
+}
+
+/// An explicit `.cs` destination is C#'s exact file; a Rust sibling is written
+/// alongside it only if Rust models are also present.
+#[test]
+fn explicit_cs_destination_is_exact_and_has_no_rust_sibling_when_none_is_needed() {
+    let directory = scratch("cs_destination");
+    std::fs::write(
+        directory.join("model.cs"),
+        r#"using Cyclone;
+        [Network] [Codec("edge")]
+        public class Player { [Network("u32")] [Codec("edge")] public uint Hp { get; set; } }
+        "#,
+    )
+    .expect("write source");
+
+    let out = directory.join("net.cs");
+    let output = cyclonec(&[
+        "--out",
+        out.to_str().expect("utf-8 path"),
+        directory.join("model.cs").to_str().expect("utf-8 path"),
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert!(out.exists());
+    assert!(
+        !out.with_extension("rs").exists(),
+        "no Rust models exist, so no Rust sibling should be written"
+    );
+}
+
+/// The C# runtime block is carried the same way the Rust one is: no
+/// `using Cyclone.Runtime` (there is no such assembly), just the classes
+/// themselves, ready to compile.
+#[test]
+fn csharp_output_carries_its_own_runtime() {
+    let (_, generated) = generate_csharp(
+        "csharp_selfcontained",
+        r#"
+        using Cyclone;
+
+        [Network]
+        [Codec("edge")]
+        public class Player
+        {
+            [Network("u32")]
+            [Codec("edge")]
+            public uint Hp { get; set; }
+        }
+        "#,
+    );
+
+    let generated = generated.expect("a codec file");
+
+    for item in ["public sealed class Writer", "public ref struct Reader", "public sealed class DecodeException", "public struct Limits"] {
+        assert!(generated.contains(item), "missing {item}");
+    }
+}
+
+/// A `[Network]` field with no wire type is the one error the C# scanner
+/// reports — the exact counterpart of the Rust `#[network]`-with-no-type case.
+#[test]
+fn csharp_network_field_needs_a_wire_type() {
+    let (output, generated) = generate_csharp(
+        "no_wire_type",
+        r#"
+        using Cyclone;
+
+        [Network]
+        [Codec("edge")]
+        public class Player
+        {
+            [Network]
+            [Codec("edge")]
+            public uint Hp { get; set; }
+        }
+        "#,
+    );
+
+    assert!(!output.status.success());
+    assert!(generated.is_none());
+    assert!(stderr(&output).contains("requires a wire type"), "{}", stderr(&output));
+}
+
+/// A struct nothing marks is not a model in C# either, and its neighbours are
+/// unaffected — the same guarantee `an_unmarked_struct_does_not_disturb_the_next_model`
+/// checks on the Rust side.
+#[test]
+fn csharp_unmarked_class_does_not_disturb_the_next_model() {
+    let (output, generated) = generate_csharp(
+        "csharp_unmarked",
+        r#"
+        using Cyclone;
+
+        public class Ignored
+        {
+            public uint Whatever { get; set; }
+        }
+
+        [Network]
+        [Codec("edge")]
+        public class Real
+        {
+            [Network("u32")]
+            [Codec("edge")]
+            public uint Value { get; set; }
+        }
+        "#,
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    assert!(generated.contains("RealEdgeCodec"));
+    assert!(!generated.contains("Ignored"));
+}
+
+/// Comments and strings are not source in C# either.
+#[test]
+fn csharp_ignores_braces_in_comments_and_strings() {
+    let (output, generated) = generate_csharp(
+        "csharp_lexing",
+        r####"
+        using Cyclone;
+
+        // [Network] public class Commented { }
+        /* [Network]
+           public class BlockCommented { } */
+
+        [Network]
+        [Codec("edge")]
+        public class Real
+        {
+            [Network("string")]
+            [Codec("edge")]
+            public string Name { get; set; } =
+                "a } brace \" in a string { [Network] public class InAString {}";
+
+            [Network("string")]
+            [Codec("edge")]
+            public string Verbatim { get; set; } = @"another } one [Network]";
+        }
+        "####,
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    assert!(generated.contains("RealEdgeCodec"));
+    assert!(!generated.contains("Commented"));
+    assert!(!generated.contains("InAString"));
+}
+
+/// A property with a default value initializer — `{ get; set; } = expr;` — is
+/// read correctly, including the initializer expression itself, which is
+/// stepped over rather than misread as the end of the class body.
+#[test]
+fn csharp_property_initializers_are_skipped_correctly() {
+    let (output, generated) = generate_csharp(
+        "csharp_initializers",
+        r#"
+        using Cyclone;
+
+        [Network]
+        [Codec("edge")]
+        public class Player
+        {
+            [Network("string")]
+            [Codec("edge")]
+            public string Name { get; set; } = string.Empty;
+
+            [Network("bytes")]
+            [Codec("edge")]
+            public byte[] Blob { get; set; } = System.Array.Empty<byte>();
+
+            [Network("u32")]
+            [Codec("edge")]
+            public uint Id { get; set; }
+        }
+        "#,
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    // All three fields were found — the initializers did not swallow `Id`.
+    assert!(generated.contains("value.Name"));
+    assert!(generated.contains("value.Blob"));
+    assert!(generated.contains("value.Id"));
+}
+
+// ================================================================ C# — helpers
+
+/// Extracts the body of one method inside one class from generated C# text —
+/// enough to check which fields a codec's `Encode` touches, without a real
+/// parser.
+fn extract_method<'a>(source: &'a str, class_name: &str, method_name: &str) -> &'a str {
+    let class_at = source.find(&format!("class {class_name}")).unwrap_or_else(|| {
+        panic!("{class_name} not found in:\n{source}")
+    });
+    let method_at = source[class_at..].find(method_name).unwrap_or_else(|| {
+        panic!("{method_name} not found in {class_name}")
+    }) + class_at;
+    let body_start = source[method_at..].find('{').unwrap() + method_at;
+    let body_end = source[body_start..].find("\n    }").unwrap() + body_start;
+    &source[body_start..body_end]
+}
+
+/// The Rust counterpart of [`extract_method`], for the parity test.
+fn extract_fn<'a>(source: &'a str, struct_name: &str, fn_name: &str) -> &'a str {
+    let struct_at = source.find(&format!("impl {struct_name}")).unwrap_or_else(|| {
+        panic!("{struct_name} not found in:\n{source}")
+    });
+    let fn_at =
+        source[struct_at..].find(&format!("fn {fn_name}")).unwrap() + struct_at;
+    let body_start = source[fn_at..].find('{').unwrap() + fn_at;
+    let body_end = source[body_start..].find("\n    }").unwrap() + body_start;
+    &source[body_start..body_end]
 }

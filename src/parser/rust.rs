@@ -1,48 +1,12 @@
-//! Source → [`Model`]s.
+//! Rust source → [`Model`]s.
 //!
-//! **This is not a Rust parser.** It does not know types, traits, lifetimes,
-//! modules, or borrowing, and it never will — `rustc` already does, and running
-//! a second copy of it to find four markers would be the slowest possible way to
-//! answer the smallest possible question.
-//!
-//! It looks for exactly this much:
-//!
-//! ```text
-//! #[network]              on a struct   →  this is a model
-//! #[codec(a, b)]          on a struct   →  generate these codecs
-//! #[network(TYPE)]        on a field    →  this field's network type
-//! #[codec(a, b)]          on a field    →  this field belongs to these codecs
-//! ```
-//!
-//! Everything else in the file is tokens to step over. A field's Rust type is
-//! skipped without being read, because the annotation already said what goes on
-//! the wire.
-//!
-//! The one thing the scanner must get right is *where a token is*: a `#[` inside
-//! a string, or a `struct` inside a comment, must not be mistaken for source.
-//! That is what [`lex`] is for, and it is the only reason this file is not a
-//! substring search.
+//! Reads `#[network]` / `#[network(TYPE)]` / `#[codec(...)]`. See
+//! [`crate::parser`] for what this scanner is and is not.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::model::{Field, Model};
-
-/// Anything that stops the generator, with the file and line it happened in.
-#[derive(Debug)]
-pub struct Error {
-    /// The file being read.
-    pub path: PathBuf,
-    /// The line it happened on.
-    pub line: usize,
-    /// What went wrong.
-    pub message: String,
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}: {}", self.path.display(), self.line, self.message)
-    }
-}
+use crate::model::{Field, Language, Model};
+use crate::parser::Error;
 
 /// Extracts every `#[network]` model from `text`.
 ///
@@ -205,6 +169,7 @@ impl<'a> Scanner<'a> {
         }
 
         let model = Model {
+            language: Language::Rust,
             name: name.to_owned(),
             codecs: dedupe(std::mem::take(&mut pending.codecs)),
             fields: match body {

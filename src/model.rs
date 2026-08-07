@@ -1,16 +1,44 @@
 //! What the parser collected, and nothing more.
 //!
 //! This is not an IR. There is no schema here, no type graph, no codec graph, no
-//! dependency graph — only the four things the generator needs to write a call:
-//! the model's name, which codecs it declares, and for each field its name, its
-//! network type and which codecs it belongs to.
+//! dependency graph — only the five things the generator needs to write a call:
+//! which source language the model came from, its name, which codecs it
+//! declares, and for each field its name, its network type and which codecs it
+//! belongs to.
 //!
-//! Everything else about the source is dropped on the way in. The Rust type of a
-//! field is never recorded, because the generator never asks: `#[network(TYPE)]`
-//! is the answer, and whether the two agree is `rustc`'s question.
+//! Everything else about the source is dropped on the way in. The host
+//! language's type of a field is never recorded, because the generator never
+//! asks: `#[network(TYPE)]` (or `[Network("TYPE")]`) is the answer, and whether
+//! the two agree is the host compiler's question.
+//!
+//! # Rust and C# produce the same shape
+//!
+//! `#[network(u32)]` and `[Network("u32")]` are two spellings of one fact: this
+//! field is a Cyclone `u32`. Both parsers resolve to the identical
+//! [`Field::network_type`] string — the Cyclone Specification's own identifier,
+//! never a host-language type name — so the generator that reads this module
+//! cannot tell, and does not need to, which syntax a model was written in. The
+//! only thing [`Model::language`] is for is choosing *which* generator backend
+//! renders the model, not what it renders.
 
-/// A struct marked `#[network]`.
+/// Which source syntax a [`Model`] was read from.
+///
+/// This selects a generator backend and an output file extension. It carries no
+/// schema information: a model parsed from C# and an equivalent one parsed from
+/// Rust hold the same [`Field::network_type`] strings and produce the same
+/// bytes on the wire, per the Cyclone Specification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Language {
+    /// Read from `#[network]` / `#[codec(...)]` in a `.rs` file.
+    Rust,
+    /// Read from `[Network]` / `[Codec(...)]` in a `.cs` file.
+    CSharp,
+}
+
+/// A struct (or, in C#, a struct or class) marked as a Cyclone network model.
 pub struct Model {
+    /// Which source syntax this model was read from.
+    pub language: Language,
     /// The type name, as the source spells it.
     pub name: String,
     /// The codecs the model declares, in the order written.
@@ -22,7 +50,7 @@ pub struct Model {
     pub fields: Vec<Field>,
 }
 
-/// A field marked `#[network(TYPE)]`.
+/// A field marked `#[network(TYPE)]` (Rust) or `[Network("TYPE")]` (C#).
 pub struct Field {
     /// The field name, used to reach the value.
     pub name: String,

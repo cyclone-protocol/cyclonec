@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    End-to-end: the C# backend's output, compiled and run.
+
+    A generator that emits plausible-looking source proves nothing. This
+    project compiles the committed `tests/fixtures/cyclone.codec.cs` (the
+    output of running cyclonec, with -o pointing there, over
+    tests/fixtures/device_state.cs) against the fixture's own models, encodes
+    with it, and compares bytes against RFC-0002.
+
+    `cargo test` covers the generator itself (parsing, codec discovery, the
+    C# backend's text output). This project covers what that text compiles
+    and runs into — the only thing that actually proves h.md §15's claim that
+    Rust and C# produce the same byte sequence for the same schema.
+
+    Run with `dotnet test` from this directory.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>false</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>Cyclonec.CSharpTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <!-- The models a user would write, and the file cyclonec generated. -->
+    <Compile Include="../fixtures/device_state.cs" Link="Fixtures/device_state.cs" />
+    <Compile Include="../fixtures/cyclone.codec.cs" Link="Fixtures/cyclone.codec.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../cyclone-attributes-csharp/Cyclone.Attributes.csproj" />
+  </ItemGroup>
+
+</Project>
