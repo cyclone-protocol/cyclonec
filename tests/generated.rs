@@ -4,8 +4,8 @@
 //! the committed `tests/fixtures/cyclone.codec.rs` into a real crate and runs
 //! it, so everything asserted below is code `rustc` accepted.
 //!
-//! There is no stub and no import. The generated file carries the runtime —
-//! `Writer`, `Reader`, `DecodeError`, `Limits` — so the bytes checked here are
+//! There is no stub and no import. The generated file carries the runtime -
+//! `Writer`, `Reader`, `DecodeError`, `Limits` - so the bytes checked here are
 //! the bytes a user would put on the wire, compared against RFC-0002.
 
 // The generated file defines the runtime as `pub`, and these tests do not call
@@ -32,9 +32,9 @@ fn encode<T>(value: &T, encode: fn(&mut Writer, &T)) -> Vec<u8> {
     writer.into_bytes()
 }
 
-// ================================================== §15 — one model, two codecs
+// ================================================== §15 - one model, two codecs
 
-/// h.md §15 — `EdgeCodec` carries `id` and `temperature`, `UnityCodec` carries
+/// h.md §15 - `EdgeCodec` carries `id` and `temperature`, `UnityCodec` carries
 /// `id` and `display_name`, each in declaration order. These are the bytes.
 #[test]
 fn each_codec_writes_the_fields_that_named_it() {
@@ -50,7 +50,7 @@ fn each_codec_writes_the_fields_that_named_it() {
         encode(&sample(), DeviceStateUnityCodec::encode),
         [
             0x2A, 0x00, 0x00, 0x00, // id = 42
-            0x08, 0x00, 0x00, 0x00, // "sensor-1" — a length in bytes
+            0x08, 0x00, 0x00, 0x00, // "sensor-1" - a length in bytes
             0x73, 0x65, 0x6E, 0x73, 0x6F, 0x72, 0x2D, 0x31,
         ]
     );
@@ -108,9 +108,9 @@ fn two_codecs_together_cover_the_routed_fields() {
     assert_eq!(value.cache, "");
 }
 
-// ========================================================== §16 — codec names
+// ========================================================== §16 - codec names
 
-/// h.md §16 — every identifier is a codec name, and the four types exist.
+/// h.md §16 - every identifier is a codec name, and the four types exist.
 #[test]
 fn unknown_codec_names_become_generated_types() {
     let value = Telemetry { sequence: 9 };
@@ -122,9 +122,9 @@ fn unknown_codec_names_become_generated_types() {
     assert_eq!(encode(&value, TelemetryCustomACodec::encode), expected);
 }
 
-// ======================================================= §8 — composite model
+// ======================================================= §8 - composite model
 
-/// h.md §8 — a model-typed field becomes a call to that model's codec, inlined:
+/// h.md §8 - a model-typed field becomes a call to that model's codec, inlined:
 /// no length, no delimiter, no header.
 #[test]
 fn a_model_field_is_inlined() {
@@ -149,9 +149,9 @@ fn a_model_field_is_inlined() {
     assert!(reader.is_empty());
 }
 
-// ============================================================ §4 — primitives
+// ============================================================ §4 - primitives
 
-/// h.md §4 — each network type maps to the runtime method RFC-0002 defines, and
+/// h.md §4 - each network type maps to the runtime method RFC-0002 defines, and
 /// these are the bytes that method writes.
 #[test]
 fn every_primitive_matches_the_specification() {
@@ -180,12 +180,12 @@ fn every_primitive_matches_the_specification() {
             0xFF, 0xFF, // i16 -1
             0x2C, 0x01, // u16 300
             0xFF, 0xFF, 0xFF, 0xFF, // i32 -1
-            0x78, 0x56, 0x34, 0x12, // u32 0x12345678 — the endianness vector
+            0x78, 0x56, 0x34, 0x12, // u32 0x12345678 - the endianness vector
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // i64 -1
             0x01, 0, 0, 0, 0, 0, 0, 0, // u64 1
             0x00, 0x00, 0xC0, 0x3F, // f32 1.5
             0, 0, 0, 0, 0, 0, 0xF0, 0x3F, // f64 1.0
-            0x03, 0, 0, 0, 0xE4, 0xB8, 0xAD, // string "中" — 3 bytes, not 1 char
+            0x03, 0, 0, 0, 0xE4, 0xB8, 0xAD, // string "中" - 3 bytes, not 1 char
             0x02, 0, 0, 0, 0xFF, 0xFE, // bytes
         ]
     );
@@ -198,7 +198,7 @@ fn every_primitive_matches_the_specification() {
 fn the_embedded_runtime_rejects_malformed_input() {
     let mut value = DeviceState::default();
 
-    // A bool is 0x00 or 0x01 and nothing else — "non-zero means true" is not
+    // A bool is 0x00 or 0x01 and nothing else - "non-zero means true" is not
     // permitted (RFC-0002 §3).
     assert_eq!(Reader::new(&[0x02]).read_bool(), Err(DecodeError::InvalidBool(0x02)));
 
@@ -259,7 +259,7 @@ fn floats_keep_their_bits() {
 
 // ================================================================ edge cases
 
-/// §15 — a declared codec is generated even when no field joined it.
+/// §15 - a declared codec is generated even when no field joined it.
 #[test]
 fn a_codec_no_field_joined_is_still_generated() {
     let bytes = encode(&NoFieldsJoined { id: 1 }, NoFieldsJoinedLonelyCodec::encode);

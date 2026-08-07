@@ -1,7 +1,7 @@
 //! The Cyclone runtime, carried verbatim into every generated file.
 //!
-//! h.md §11 gives the generated source two choices — *contain* the
-//! implementations prepared for the target, or *reference* them — and this is
+//! h.md §11 gives the generated source two choices - *contain* the
+//! implementations prepared for the target, or *reference* them - and this is
 //! the first. §22 says the same thing from the other side: `Reader`, `Writer`,
 //! `DecodeError` and `Limits` are listed as part of Generated Source.
 //!
@@ -13,7 +13,7 @@
 //! §10 forbids the generator from working out byte layout, endianness or string
 //! encoding. It does not: the text below is fixed, written once against RFC-0002,
 //! and copied out unchanged. Nothing here is computed per model, per field, or
-//! per run — the generator cannot derive a wire format even in principle,
+//! per run - the generator cannot derive a wire format even in principle,
 //! because it only knows how to `push_str` this.
 //!
 //! Everything is spelled with fully-qualified paths (`::core::…`, `::std::…`) so
@@ -23,7 +23,7 @@
 /// The runtime block, emitted once at the top of every generated file.
 pub const RUNTIME: &str = r####"
 // ==========================================================================
-// Cyclone runtime — RFC-0002, carried verbatim.
+// Cyclone runtime - RFC-0002, carried verbatim.
 //
 // Not generated from your models: this block is identical in every file
 // cyclonec writes. It is here so the file is self-contained.
@@ -288,7 +288,7 @@ impl<'a> Reader<'a> {
     ///
     /// # Errors
     ///
-    /// [`DecodeError::InvalidBool`] for any byte but `0x00` and `0x01` —
+    /// [`DecodeError::InvalidBool`] for any byte but `0x00` and `0x01` -
     /// "non-zero means true" is not permitted.
     pub fn read_bool(&mut self) -> ::core::result::Result<bool, DecodeError> {
         let byte = self.read_u8()?;

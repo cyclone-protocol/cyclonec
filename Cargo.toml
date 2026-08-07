@@ -14,8 +14,8 @@ homepage = "https://cyclone-protocol.github.io"
 name = "cyclonec"
 path = "src/main.rs"
 
-# No dependencies, and none are wanted. `cyclonec` does not parse Rust — it
-# looks for four markers and writes call sites — so a full syntax library would
+# No dependencies, and none are wanted. `cyclonec` does not parse Rust - it
+# looks for four markers and writes call sites - so a full syntax library would
 # cost startup time and buy nothing. See `parser.rs`.
 
 [profile.release]

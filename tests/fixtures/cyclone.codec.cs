@@ -3,17 +3,17 @@
 // Sources:
 //     device_state.cs
 //
-// This file is self-contained. It carries the Cyclone runtime — Writer,
-// Reader, DecodeException, Limits — as well as every codec, so there is
+// This file is self-contained. It carries the Cyclone runtime - Writer,
+// Reader, DecodeException, Limits - as well as every codec, so there is
 // nothing to add to your .csproj and nothing to import. Add it to your
 // project (cyclone.codec.cs) and it compiles.
 //
 // A nested model field must already hold an instance before Decode fills
-// its routed fields — a property initializer (`= new();`) is enough.
+// its routed fields - a property initializer (`= new();`) is enough.
 #nullable disable
 
 // ==========================================================================
-// Cyclone runtime — RFC-0002, carried verbatim.
+// Cyclone runtime - RFC-0002, carried verbatim.
 //
 // Not generated from your models: this block is identical in every file
 // cyclonec writes. It is here so the file is self-contained.
@@ -296,7 +296,7 @@ public ref struct Reader
 }
 
 // ==========================================================================
-// Codecs — one per codec each model declared, in declaration order.
+// Codecs - one per codec each model declared, in declaration order.
 // ==========================================================================
 
 /// <summary>The <c>edge</c> codec for <see cref="DeviceState"/>, generated from its Cyclone attributes.</summary>

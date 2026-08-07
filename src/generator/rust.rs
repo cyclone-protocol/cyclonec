@@ -24,7 +24,7 @@
 //!
 //! [`super::csharp`] is the other. Both read the same [`Model`], produce the
 //! same codec names for the same schema (see [`crate::model::pascal_case`]),
-//! and differ only in the syntax and the runtime method names they write — see
+//! and differ only in the syntax and the runtime method names they write - see
 //! that module's header for the shared contract.
 
 use crate::model::{pascal_case, Field, Model};
@@ -34,7 +34,7 @@ use crate::model::{pascal_case, Field, Model};
 ///
 /// This table is the whole of the generator's type knowledge. Every name in it
 /// comes from RFC-0002's Reader / Writer interface; a name that is not in it is
-/// not looked up, resolved, or imported — it is another model, and §8 says to
+/// not looked up, resolved, or imported - it is another model, and §8 says to
 /// spell the call and let `rustc` decide whether it exists.
 const PRIMITIVES: &[(&str, &str, &str, bool)] = &[
     // (network type, writer method, reader method, passed by reference)
@@ -65,13 +65,13 @@ pub const EXTENSION: &str = "rs";
 /// `sources` is the list of files the models came from, in the order they were
 /// read; it appears in the header and nowhere else.
 ///
-/// Returns `None` when there is nothing to write — no models, or none that
-/// declared a codec — so no empty file is left behind for the next reader to
+/// Returns `None` when there is nothing to write - no models, or none that
+/// declared a codec - so no empty file is left behind for the next reader to
 /// wonder about.
 ///
 /// The output is deterministic: the same models produce byte-identical text on
-/// every machine. The header names the source files and nothing else — no path,
-/// no timestamp, no version — which is what makes `--check` mean something.
+/// every machine. The header names the source files and nothing else - no path,
+/// no timestamp, no version - which is what makes `--check` mean something.
 pub fn render(sources: &[String], models: &[Model], file_name: &str) -> Option<String> {
     if models.iter().all(|model| model.codecs.is_empty()) {
         return None;
@@ -86,8 +86,8 @@ pub fn render(sources: &[String], models: &[Model], file_name: &str) -> Option<S
         out.push_str(&format!("//     {source}\n"));
     }
     out.push_str("//\n");
-    out.push_str("// This file is self-contained. It carries the Cyclone runtime — Writer,\n");
-    out.push_str("// Reader, DecodeError, Limits — as well as every codec, so there is nothing\n");
+    out.push_str("// This file is self-contained. It carries the Cyclone runtime - Writer,\n");
+    out.push_str("// Reader, DecodeError, Limits - as well as every codec, so there is nothing\n");
     out.push_str("// to add to Cargo.toml and nothing to import. Include it where your models\n");
     out.push_str("// are in scope:\n");
     out.push_str("//\n");
@@ -96,7 +96,7 @@ pub fn render(sources: &[String], models: &[Model], file_name: &str) -> Option<S
     out.push_str(super::rust_runtime::RUNTIME);
 
     out.push_str("\n// ==========================================================================\n");
-    out.push_str("// Codecs — one per codec each model declared, in declaration order.\n");
+    out.push_str("// Codecs - one per codec each model declared, in declaration order.\n");
     out.push_str("// ==========================================================================\n");
 
     for model in models {
@@ -120,8 +120,8 @@ fn codec_type(out: &mut String, model: &Model, codec: &str) {
     out.push_str(&format!("pub struct {name};\n\n"));
     out.push_str(&format!("impl {name} {{\n"));
 
-    // A codec no field joined is still generated — §15, a declared codec is not
-    // the generator's to drop — but its parameters go unread, so they are named
+    // A codec no field joined is still generated - §15, a declared codec is not
+    // the generator's to drop - but its parameters go unread, so they are named
     // to say so rather than warning in every build that compiles the output.
     let unused = if model.fields_in(codec).next().is_none() { "_" } else { "" };
 

@@ -1,7 +1,7 @@
 //! Source → [`Model`]s, one scanner per source language.
 //!
 //! **Neither scanner is a parser for its language.** Neither knows types,
-//! traits, generics, namespaces, or any other semantic of Rust or C# — the host
+//! traits, generics, namespaces, or any other semantic of Rust or C# - the host
 //! compiler already does, and running a second copy of it to find four markers
 //! would be the slowest possible way to answer the smallest possible question.
 //!
@@ -17,7 +17,7 @@
 //!
 //! Everything else in a file is tokens to step over. A field's host-language
 //! type is skipped without being read, because the annotation already said what
-//! goes on the wire — see [`crate::model`] for why that is not a detail, but the
+//! goes on the wire - see [`crate::model`] for why that is not a detail, but the
 //! whole point.
 //!
 //! The one thing each scanner must get right is *where a token is*: a `#[` or
@@ -26,6 +26,7 @@
 //! this is a scanner and not a substring search.
 
 pub mod csharp;
+pub mod go;
 pub mod rust;
 
 use std::path::{Path, PathBuf};
@@ -50,11 +51,11 @@ impl std::fmt::Display for Error {
 }
 
 /// Extracts every network model from `text`, choosing a scanner by `path`'s
-/// extension: `.cs` reads C#, anything else reads Rust.
+/// extension: `.cs` reads C#, `.go` reads Go, anything else reads Rust.
 ///
 /// `path` is carried for error messages only; nothing reads it to decide
-/// content — the extension check is the one exception, and it exists only to
-/// pick which of the two scanners below runs.
+/// content - the extension check is the one exception, and it exists only to
+/// pick which of the three scanners below runs.
 ///
 /// # Errors
 ///
@@ -64,6 +65,7 @@ impl std::fmt::Display for Error {
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("cs") => csharp::parse(path, text),
+        Some("go") => go::parse(path, text),
         _ => rust::parse(path, text),
     }
 }

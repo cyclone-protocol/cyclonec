@@ -4,7 +4,7 @@
 //! defined by `cyclone-attributes` (the C# package, namespace `Cyclone`). See
 //! [`crate::parser`] for what this scanner is and is not, and [`crate::model`]
 //! for why `[Network("u32")]` on a `ulong` property still means the Cyclone wire
-//! type `u32` — this scanner never looks at the C# type beside the attribute,
+//! type `u32` - this scanner never looks at the C# type beside the attribute,
 //! only at the string inside it.
 //!
 //! # Scope
@@ -14,7 +14,7 @@
 //! model inside `mod`). Namespaces are stepped over like any other braces: this
 //! scanner does not qualify a model's name with its namespace, so a codec that
 //! references another model by name relies on both being in scope together at
-//! the point the generated file is compiled — again, the same limitation the
+//! the point the generated file is compiled - again, the same limitation the
 //! Rust side already has for `mod`.
 
 use std::path::Path;
@@ -108,8 +108,8 @@ impl<'a> Scanner<'a> {
         Ok(models)
     }
 
-    /// Reads a `[...]` attribute section — one or more attributes, separated by
-    /// top-level commas — adding the Cyclone ones to `pending`.
+    /// Reads a `[...]` attribute section - one or more attributes, separated by
+    /// top-level commas - adding the Cyclone ones to `pending`.
     fn attribute_section(&mut self, pending: &mut Pending) -> Result<(), Error> {
         let line = self.tokens[self.at].line;
         let open = self.at;
@@ -191,7 +191,7 @@ impl<'a> Scanner<'a> {
 
         // A type nothing marks is somebody else's. It must not become an error
         // just because it shares a file with a model. (Whether `[Network]` on a
-        // class carried a wire type is not checked — the same leniency the Rust
+        // class carried a wire type is not checked - the same leniency the Rust
         // scanner has for `#[network(u32)] struct Foo`.)
         let is_model = pending.network.is_some();
 
@@ -245,7 +245,7 @@ impl<'a> Scanner<'a> {
 
             // A member declaration: modifiers and a type, then the name, then
             // either `;` / `= value ;` (a field) or `{ ... }` (a property). The
-            // C# type is never read — only where the declaration ends matters —
+            // C# type is never read - only where the declaration ends matters -
             // so this walks to that point and takes the last identifier before
             // it as the name. `(` means a method or constructor, which cannot
             // legally carry `[Network]` on itself; skipped whole.
@@ -267,7 +267,7 @@ impl<'a> Scanner<'a> {
                     if !pending.is_empty() {
                         let line = pending.line;
                         match pending.network.take() {
-                            // §18's C# counterpart — told the field is on the
+                            // §18's C# counterpart - told the field is on the
                             // wire, not told what to write for it.
                             Some(None) => {
                                 return Err(self.error(
@@ -282,7 +282,7 @@ impl<'a> Scanner<'a> {
                             }),
                             // `[Codec(...)]` with no `[Network(...)]` names a
                             // codec for a field the generator does not know is
-                            // on the wire at all — as much a mistake as the one
+                            // on the wire at all - as much a mistake as the one
                             // above, and reported the same way.
                             None if !pending.codecs.is_empty() => {
                                 return Err(self.error(
@@ -299,7 +299,7 @@ impl<'a> Scanner<'a> {
                 }
                 // Defensive: every other arm above is guaranteed to advance
                 // `self.at`. This one is reached on debris `declaration_end`
-                // could not name a member from — guarantee progress anyway, so
+                // could not name a member from - guarantee progress anyway, so
                 // a construct this scanner does not recognise is skipped rather
                 // than hung on.
                 DeclarationEnd::EndOfBody => {
@@ -371,8 +371,8 @@ impl<'a> Scanner<'a> {
                 }
                 Kind::Punct('{') => {
                     self.skip_balanced('{', '}');
-                    // An auto-property may carry a default value initializer —
-                    // `{ get; set; } = expr;` — which is not valid C# without
+                    // An auto-property may carry a default value initializer -
+                    // `{ get; set; } = expr;` - which is not valid C# without
                     // the trailing `;`. If what follows the accessor block is
                     // `=`, the declaration is not over: keep scanning for the
                     // terminator. A nested `{ ... }` inside that expression
@@ -458,12 +458,12 @@ impl<'a> Scanner<'a> {
 /// What a member declaration turned out to be, once the scanner reached the
 /// token that reveals it.
 enum DeclarationEnd {
-    /// A method or constructor — `(` at depth 0. `[Network]` cannot legally
+    /// A method or constructor - `(` at depth 0. `[Network]` cannot legally
     /// attach to one, so a pending Cyclone attribute here is an error.
     Method,
     /// A field or property, named by the identifier at `name_index`.
     Member { name_index: usize },
-    /// The body ended before a member could be identified — a trailing `[Codec]`
+    /// The body ended before a member could be identified - a trailing `[Codec]`
     /// with nothing after it, or similar debris.
     EndOfBody,
 }
@@ -503,7 +503,7 @@ fn split_top_level<'a, 'b>(tokens: &'b [Token<'a>]) -> Vec<&'b [Token<'a>]> {
 }
 
 /// Drops repeats, keeping the order the source wrote. See the identical helper
-/// in [`crate::parser::rust`] — a codec named twice would produce the same
+/// in [`crate::parser::rust`] - a codec named twice would produce the same
 /// generated type twice, a guaranteed compile error rather than a schema
 /// question, so it is removed here rather than reported.
 fn dedupe(mut names: Vec<String>) -> Vec<String> {
@@ -541,7 +541,7 @@ struct Token<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind<'a> {
     Ident(&'a str),
-    /// A string literal's contents — decoded enough to read a wire type or
+    /// A string literal's contents - decoded enough to read a wire type or
     /// codec name, which is the only thing a string ever holds here.
     Str(&'a str),
     Punct(char),
@@ -602,7 +602,7 @@ fn lex(text: &str) -> Vec<Token<'_>> {
         }
 
         // A preprocessor directive runs to end of line. `#if` blocks are not
-        // evaluated — a model behind one is read either way, which is safer
+        // evaluated - a model behind one is read either way, which is safer
         // than guessing which branch a build takes.
         if byte == b'#' {
             while at < bytes.len() && bytes[at] != b'\n' {
@@ -663,7 +663,7 @@ fn lex(text: &str) -> Vec<Token<'_>> {
     tokens
 }
 
-/// Matches a string literal in any of C#'s spellings — `"…"`, `@"…"`, `$"…"`,
+/// Matches a string literal in any of C#'s spellings - `"…"`, `@"…"`, `$"…"`,
 /// `$@"…"`/`@$"…"`, and the raw `"""…"""` form.
 ///
 /// Returns the decoded contents, the index just past the literal, and how many

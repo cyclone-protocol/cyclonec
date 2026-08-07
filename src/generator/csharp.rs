@@ -3,7 +3,7 @@
 //! The C# counterpart of [`super::rust`]. Same rule, same shape: a model is
 //! walked once, a codec at a time, a field at a time, and each field appends
 //! one statement. The network type is looked up in [`PRIMITIVES`], and anything
-//! not in that table is another model's name, spelled into a call — `cyclonec`
+//! not in that table is another model's name, spelled into a call - `cyclonec`
 //! never checks that the call resolves; the C# compiler does.
 //!
 //! # Kept equivalent to the Rust backend
@@ -12,7 +12,7 @@
 //! [`crate::model`]), produce the same codec name for the same schema
 //! (`DeviceState` + `edge` → `DeviceStateEdgeCodec` on both sides), route fields
 //! to codecs by the same rule, and call a runtime method that performs the same
-//! RFC-0002 byte layout — [`super::csharp_runtime`] is written against the same
+//! RFC-0002 byte layout - [`super::csharp_runtime`] is written against the same
 //! specification as [`super::rust_runtime`], method for method. What differs is
 //! syntax only: C# spells the field access `value.Id`, not `value.id`, because
 //! that is what the source wrote; it does not spell a different wire format.
@@ -24,7 +24,7 @@
 //! all, so a nested model field is decoded through a local: read the existing
 //! value out, decode into it by `ref`, assign it back. See [`decode_field`].
 //! This preserves the same "leaves fields this codec does not carry alone"
-//! guarantee the Rust side has — including recursively, into the nested model —
+//! guarantee the Rust side has - including recursively, into the nested model -
 //! provided the field already holds an instance, the same requirement Rust's
 //! version has (there, the language enforces it; here, the caller must).
 
@@ -34,7 +34,7 @@ use crate::model::{pascal_case, Field, Model};
 ///
 /// Every name in this table comes from RFC-0002's Reader / Writer interface,
 /// spelled the way [`super::csharp_runtime`] spells it. A name that is not in
-/// it is not looked up, resolved, or imported — it is another model, and the
+/// it is not looked up, resolved, or imported - it is another model, and the
 /// call is spelled and left for the C# compiler to resolve or reject.
 const PRIMITIVES: &[(&str, &str, &str)] = &[
     // (network type, writer method, reader method)
@@ -62,7 +62,7 @@ pub const EXTENSION: &str = "cs";
 /// Renders one self-contained file: the runtime, then every codec every C#
 /// model declared.
 ///
-/// See [`super::rust::render`] — same contract, same determinism guarantee.
+/// See [`super::rust::render`] - same contract, same determinism guarantee.
 /// `file_name` appears only in the header comment; C# has no `include!`, so a
 /// generated file is simply added to the project (or picked up by the SDK's
 /// default `**/*.cs` glob) rather than referenced by name.
@@ -80,19 +80,19 @@ pub fn render(sources: &[String], models: &[Model], file_name: &str) -> Option<S
         out.push_str(&format!("//     {source}\n"));
     }
     out.push_str("//\n");
-    out.push_str("// This file is self-contained. It carries the Cyclone runtime — Writer,\n");
-    out.push_str("// Reader, DecodeException, Limits — as well as every codec, so there is\n");
+    out.push_str("// This file is self-contained. It carries the Cyclone runtime - Writer,\n");
+    out.push_str("// Reader, DecodeException, Limits - as well as every codec, so there is\n");
     out.push_str("// nothing to add to your .csproj and nothing to import. Add it to your\n");
     out.push_str(&format!("// project ({file_name}) and it compiles.\n"));
     out.push_str("//\n");
     out.push_str("// A nested model field must already hold an instance before Decode fills\n");
-    out.push_str("// its routed fields — a property initializer (`= new();`) is enough.\n");
+    out.push_str("// its routed fields - a property initializer (`= new();`) is enough.\n");
     out.push_str("#nullable disable\n");
 
     out.push_str(super::csharp_runtime::RUNTIME);
 
     out.push_str("\n// ==========================================================================\n");
-    out.push_str("// Codecs — one per codec each model declared, in declaration order.\n");
+    out.push_str("// Codecs - one per codec each model declared, in declaration order.\n");
     out.push_str("// ==========================================================================\n");
 
     for model in models {
@@ -153,7 +153,7 @@ fn codec_type(out: &mut String, model: &Model, codec: &str) {
 ///
 /// Unlike Rust, nothing here is written by reference: `string` and `byte[]` are
 /// already reference types in C#, so `writer.WriteString(value.Name)` needs no
-/// `&` — there is no C# equivalent of that borrow to spell.
+/// `&` - there is no C# equivalent of that borrow to spell.
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let name = &field.name;
 

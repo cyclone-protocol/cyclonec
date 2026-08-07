@@ -1,25 +1,25 @@
 //! What the parser collected, and nothing more.
 //!
 //! This is not an IR. There is no schema here, no type graph, no codec graph, no
-//! dependency graph — only the five things the generator needs to write a call:
+//! dependency graph - only the five things the generator needs to write a call:
 //! which source language the model came from, its name, which codecs it
 //! declares, and for each field its name, its network type and which codecs it
 //! belongs to.
 //!
 //! Everything else about the source is dropped on the way in. The host
 //! language's type of a field is never recorded, because the generator never
-//! asks: `#[network(TYPE)]` (or `[Network("TYPE")]`) is the answer, and whether
-//! the two agree is the host compiler's question.
+//! asks: `#[network(TYPE)]`, `[Network("TYPE")]`, or `` `cyclone:"TYPE"` `` is
+//! the answer, and whether the two agree is the host compiler's question.
 //!
-//! # Rust and C# produce the same shape
+//! # Rust, C# and Go produce the same shape
 //!
-//! `#[network(u32)]` and `[Network("u32")]` are two spellings of one fact: this
-//! field is a Cyclone `u32`. Both parsers resolve to the identical
-//! [`Field::network_type`] string — the Cyclone Specification's own identifier,
-//! never a host-language type name — so the generator that reads this module
-//! cannot tell, and does not need to, which syntax a model was written in. The
-//! only thing [`Model::language`] is for is choosing *which* generator backend
-//! renders the model, not what it renders.
+//! `#[network(u32)]`, `[Network("u32")]`, and `` `cyclone:"u32"` `` are three
+//! spellings of one fact: this field is a Cyclone `u32`. All three scanners
+//! resolve to the identical [`Field::network_type`] string - the Cyclone
+//! Specification's own identifier, never a host-language type name - so the
+//! generator that reads this module cannot tell, and does not need to, which
+//! syntax a model was written in. The only thing [`Model::language`] is for is
+//! choosing *which* generator backend renders the model, not what it renders.
 
 /// Which source syntax a [`Model`] was read from.
 ///
@@ -33,6 +33,9 @@ pub enum Language {
     Rust,
     /// Read from `[Network]` / `[Codec(...)]` in a `.cs` file.
     CSharp,
+    /// Read from a `//cyclone:model` comment directive and `cyclone:"..."` /
+    /// `codec:"..."` struct tags in a `.go` file.
+    Go,
 }
 
 /// A struct (or, in C#, a struct or class) marked as a Cyclone network model.
@@ -57,7 +60,7 @@ pub struct Field {
     /// The Cyclone network type, exactly as the annotation spelled it.
     ///
     /// Either a primitive the generator knows a method for, or a name it treats
-    /// as another model. Nothing here decides which — [`crate::generator`] does,
+    /// as another model. Nothing here decides which - [`crate::generator`] does,
     /// with a table lookup and no analysis.
     pub network_type: String,
     /// The codecs this field belongs to, in the order written.
@@ -79,11 +82,78 @@ impl Model {
     }
 }
 
+/// Checks that every nested-model field routes only into codecs the
+/// *referenced* model actually declares.
+///
+/// A field whose Cyclone type names another model - `#[network(PlayerInfo)]`,
+/// `[Network("PlayerInfo")]`, `` `cyclone:"PlayerInfo"` `` - carries its own
+/// codec list over to the nested call: routing `Player.info` into `edge` means
+/// the generated `PlayerEdgeCodec` calls `PlayerInfoEdgeCodec`. If `PlayerInfo`
+/// itself never declared an `edge` codec, that call names a type nothing will
+/// ever generate - a dangling reference the three backends have no way to
+/// notice on their own, because each renders one model at a time and never
+/// looks at another model's own codec list.
+///
+/// This is the one thing generation itself must catch before writing anything:
+/// unlike a Cyclone type this run never parsed at all (a hand-written codec, a
+/// type from another package), which is rightly left for the host compiler to
+/// resolve or reject, a model *this run did parse* has already told us exactly
+/// which codecs it has. Silently emitting the call anyway would defer a
+/// knowable error to a confusing one, in whichever host compiler hits it
+/// first - and design a validation that requires nothing this crate doesn't
+/// already have: the check is pure comparison of the metadata already
+/// collected, run once per language before that language's models are handed
+/// to its generator.
+///
+/// # Errors
+///
+/// The first dangling reference found, naming the model, the field, the codec,
+/// and what the referenced model declares instead.
+pub fn check_nested_codecs(models: &[Model]) -> Result<(), String> {
+    for model in models {
+        for codec in &model.codecs {
+            for field in model.fields_in(codec) {
+                let Some(referenced) =
+                    models.iter().find(|candidate| candidate.name == field.network_type)
+                else {
+                    // Not a model this run parsed - a primitive, or a type
+                    // defined elsewhere. Left to the host compiler, same as
+                    // ever: see h.md's own "let native compiler resolve
+                    // missing symbols" rule.
+                    continue;
+                };
+
+                if referenced.codecs.iter().any(|declared| declared == codec) {
+                    continue;
+                }
+
+                let declares = if referenced.codecs.is_empty() {
+                    "no codecs".to_owned()
+                } else {
+                    format!("only: {}", referenced.codecs.join(", "))
+                };
+                return Err(format!(
+                    "model '{}' field '{}' routes into codec '{codec}', but the model it \
+                     references, '{}', declares {declares} - '{}{}Codec' would never be \
+                     generated",
+                    model.name,
+                    field.name,
+                    referenced.name,
+                    referenced.name,
+                    pascal_case(codec),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Turns a codec identifier into the PascalCase fragment of a generated name.
 ///
 /// `edge` becomes `Edge`, `orange_pi` becomes `OrangePi`, `custom_a` becomes
 /// `CustomA`. That is the entire meaning a codec name has here: the generator
-/// never resolves it, imports it, or looks it up — it spells a type name with it
+/// never resolves it, imports it, or looks it up - it spells a type name with it
 /// and moves on.
 pub fn pascal_case(identifier: &str) -> String {
     let mut out = String::with_capacity(identifier.len());

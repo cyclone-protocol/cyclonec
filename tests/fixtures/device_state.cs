@@ -1,4 +1,4 @@
-// The C# fixture the generator is tested against — the same schema as
+// The C# fixture the generator is tested against - the same schema as
 // device_state.rs, spelled in C# attribute syntax, to prove the two produce
 // the same codec names, the same field routing, and the same bytes.
 
@@ -29,7 +29,7 @@ public class DeviceState
     public string Cache { get; set; } = string.Empty;
 }
 
-/// <summary>§16 — codec names the generator has never heard of.</summary>
+/// <summary>§16 - codec names the generator has never heard of.</summary>
 [Network]
 [Codec("edge", "orange_pi", "unity", "custom_a")]
 public class Telemetry
@@ -39,7 +39,7 @@ public class Telemetry
     public ulong Sequence { get; set; }
 }
 
-/// <summary>§8 — a field whose network type is another model.</summary>
+/// <summary>§8 - a field whose network type is another model.</summary>
 [Network]
 [Codec("edge")]
 public class PlayerInfo

@@ -11,7 +11,7 @@
 
     `cargo test` covers the generator itself (parsing, codec discovery, the
     C# backend's text output). This project covers what that text compiles
-    and runs into — the only thing that actually proves h.md §15's claim that
+    and runs into - the only thing that actually proves h.md §15's claim that
     Rust and C# produce the same byte sequence for the same schema.
 
     Run with `dotnet test` from this directory.

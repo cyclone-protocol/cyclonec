@@ -5,7 +5,7 @@
 
 use cyclone_attributes::*;
 
-/// h.md §2 and §15 — two codecs, and a field in each combination of them.
+/// h.md §2 and §15 - two codecs, and a field in each combination of them.
 #[network]
 #[codec(edge, unity)]
 #[derive(Debug, Default, PartialEq)]
@@ -30,7 +30,7 @@ pub struct DeviceState {
     pub cache: String,
 }
 
-/// h.md §16 — codec names the generator has never heard of, and the PascalCase
+/// h.md §16 - codec names the generator has never heard of, and the PascalCase
 /// they turn into.
 #[network]
 #[codec(edge, orange_pi, unity, custom_a)]
@@ -41,7 +41,7 @@ pub struct Telemetry {
     pub sequence: u64,
 }
 
-/// h.md §8 — a field whose network type is another model.
+/// h.md §8 - a field whose network type is another model.
 #[network]
 #[codec(edge)]
 #[derive(Debug, Default)]
@@ -145,7 +145,7 @@ pub struct NoCodecs {
     pub id: u32,
 }
 
-/// Nothing marks this, so it is not a model — and its annotated-looking fields
+/// Nothing marks this, so it is not a model - and its annotated-looking fields
 /// must not leak into the model declared after it.
 #[derive(Debug, Default)]
 pub struct NotAModel {

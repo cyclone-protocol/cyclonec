@@ -3,15 +3,15 @@
 // Sources:
 //     device_state.rs
 //
-// This file is self-contained. It carries the Cyclone runtime — Writer,
-// Reader, DecodeError, Limits — as well as every codec, so there is nothing
+// This file is self-contained. It carries the Cyclone runtime - Writer,
+// Reader, DecodeError, Limits - as well as every codec, so there is nothing
 // to add to Cargo.toml and nothing to import. Include it where your models
 // are in scope:
 //
 //     include!("cyclone.codec.rs");
 
 // ==========================================================================
-// Cyclone runtime — RFC-0002, carried verbatim.
+// Cyclone runtime - RFC-0002, carried verbatim.
 //
 // Not generated from your models: this block is identical in every file
 // cyclonec writes. It is here so the file is self-contained.
@@ -276,7 +276,7 @@ impl<'a> Reader<'a> {
     ///
     /// # Errors
     ///
-    /// [`DecodeError::InvalidBool`] for any byte but `0x00` and `0x01` —
+    /// [`DecodeError::InvalidBool`] for any byte but `0x00` and `0x01` -
     /// "non-zero means true" is not permitted.
     pub fn read_bool(&mut self) -> ::core::result::Result<bool, DecodeError> {
         let byte = self.read_u8()?;
@@ -421,7 +421,7 @@ impl<'a> Reader<'a> {
 }
 
 // ==========================================================================
-// Codecs — one per codec each model declared, in declaration order.
+// Codecs - one per codec each model declared, in declaration order.
 // ==========================================================================
 
 /// The `edge` codec for [`DeviceState`], generated from its Cyclone attributes.

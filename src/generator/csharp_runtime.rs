@@ -1,6 +1,6 @@
 //! The Cyclone runtime, carried verbatim into every generated C# file.
 //!
-//! The C# counterpart of [`super::rust_runtime`] — same reasoning, same
+//! The C# counterpart of [`super::rust_runtime`] - same reasoning, same
 //! guarantee: the block below is fixed, written once against RFC-0002, and
 //! copied out unchanged. Nothing about byte layout is computed per model, per
 //! field, or per run.
@@ -9,7 +9,7 @@
 //! same Little Endian rule, same `bool` validation, same UTF-8 rejection, same
 //! `Limits` guard against an unbounded allocation from an untrusted length.
 //! `cyclonec`'s two backends read one `Model` and must produce one Cyclone
-//! Specification's worth of bytes — this is what keeps that true on the C# side
+//! Specification's worth of bytes - this is what keeps that true on the C# side
 //! without a shared assembly, since none is linked in (h.md §16).
 //!
 //! No namespace wrapper: the classes are usable the moment the file is in the
@@ -18,7 +18,7 @@
 /// The runtime block, emitted once at the top of every generated C# file.
 pub const RUNTIME: &str = r####"
 // ==========================================================================
-// Cyclone runtime — RFC-0002, carried verbatim.
+// Cyclone runtime - RFC-0002, carried verbatim.
 //
 // Not generated from your models: this block is identical in every file
 // cyclonec writes. It is here so the file is self-contained.

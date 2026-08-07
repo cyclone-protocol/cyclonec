@@ -224,7 +224,7 @@ impl<'a> Scanner<'a> {
             self.skip_field_type(close);
 
             match pending.network.take() {
-                // §18 — the one syntax error worth reporting: the generator was
+                // §18 - the one syntax error worth reporting: the generator was
                 // told this field is on the wire but not what to write for it.
                 Some(None) => {
                     return Err(self.error(line, "#[network] field requires a network type"));
@@ -285,8 +285,8 @@ impl<'a> Scanner<'a> {
 
     /// Steps over a field's Rust type without reading it.
     ///
-    /// The type is never inspected — `#[network(TYPE)]` already said what goes
-    /// on the wire — so this only has to find where the field ends.
+    /// The type is never inspected - `#[network(TYPE)]` already said what goes
+    /// on the wire - so this only has to find where the field ends.
     fn skip_field_type(&mut self, close: usize) {
         let mut depth = 0i32;
 
@@ -354,7 +354,7 @@ fn render(tokens: &[Token<'_>]) -> String {
 /// Drops repeats, keeping the order the source wrote.
 ///
 /// A codec named twice would otherwise produce the same generated type twice,
-/// which is a guaranteed compile error rather than a schema question — so it is
+/// which is a guaranteed compile error rather than a schema question - so it is
 /// removed here instead of reported.
 fn dedupe(mut names: Vec<String>) -> Vec<String> {
     let mut seen = Vec::with_capacity(names.len());
@@ -469,7 +469,7 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // `r"…"`, `r#"…"#`, `br#"…"#` — the hash count closes it.
+        // `r"…"`, `r#"…"#`, `br#"…"#` - the hash count closes it.
         if let Some(next) = raw_string(bytes, at) {
             line += count_newlines(&bytes[at..next]);
             at = next;

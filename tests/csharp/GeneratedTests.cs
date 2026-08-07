@@ -9,7 +9,7 @@ namespace Cyclonec.CSharpTests;
 /// <remarks>
 /// The models come from <c>tests/fixtures/device_state.cs</c> and the codecs
 /// from <c>tests/fixtures/cyclone.codec.cs</c>, which <c>cyclonec</c> wrote.
-/// Nothing here is hand-written except the assertions — and every byte
+/// Nothing here is hand-written except the assertions - and every byte
 /// expectation below is copied from <c>tests/generated.rs</c>, the Rust
 /// backend's identical test, which is the whole of h.md §15's proof: the same
 /// schema, read from two different syntaxes, produces the same bytes.
@@ -32,10 +32,10 @@ public sealed class GeneratedTests
         return writer.ToArray();
     }
 
-    // ================================================ §15 — one model, two codecs
+    // ================================================ §15 - one model, two codecs
 
     /// <summary>
-    /// h.md §15 — <c>EdgeCodec</c> carries <c>Id</c> and <c>Temperature</c>,
+    /// h.md §15 - <c>EdgeCodec</c> carries <c>Id</c> and <c>Temperature</c>,
     /// <c>UnityCodec</c> carries <c>Id</c> and <c>DisplayName</c>, each in
     /// declaration order. These are the same bytes the Rust backend's identical
     /// test asserts.
@@ -55,7 +55,7 @@ public sealed class GeneratedTests
             new byte[]
             {
                 0x2A, 0x00, 0x00, 0x00, // Id = 42
-                0x08, 0x00, 0x00, 0x00, // "sensor-1" — a length in bytes
+                0x08, 0x00, 0x00, 0x00, // "sensor-1" - a length in bytes
                 0x73, 0x65, 0x6E, 0x73, 0x6F, 0x72, 0x2D, 0x31,
             },
             EncodeWith(Sample(), DeviceStateUnityCodec.Encode));
@@ -120,9 +120,9 @@ public sealed class GeneratedTests
         Assert.Equal("", value.Cache);
     }
 
-    // ======================================================== §16 — codec names
+    // ======================================================== §16 - codec names
 
-    /// <summary>h.md §16 — every identifier is a codec name, and the four types exist.</summary>
+    /// <summary>h.md §16 - every identifier is a codec name, and the four types exist.</summary>
     [Fact]
     public void UnknownCodecNamesBecomeGeneratedTypes()
     {
@@ -135,10 +135,10 @@ public sealed class GeneratedTests
         Assert.Equal(expected, EncodeWith(value, TelemetryCustomACodec.Encode));
     }
 
-    // ===================================================== §8 — composite model
+    // ===================================================== §8 - composite model
 
     /// <summary>
-    /// h.md §8 — a model-typed field becomes a call to that model's codec,
+    /// h.md §8 - a model-typed field becomes a call to that model's codec,
     /// inlined: no length, no delimiter, no header.
     /// </summary>
     [Fact]
@@ -165,10 +165,10 @@ public sealed class GeneratedTests
         Assert.True(reader.IsEmpty);
     }
 
-    // ========================================================== §4 — primitives
+    // ========================================================== §4 - primitives
 
     /// <summary>
-    /// h.md §4 — each network type maps to the runtime method RFC-0002 defines,
+    /// h.md §4 - each network type maps to the runtime method RFC-0002 defines,
     /// and these are the bytes that method writes.
     /// </summary>
     [Fact]
@@ -200,12 +200,12 @@ public sealed class GeneratedTests
                 0xFF, 0xFF, // i16 -1
                 0x2C, 0x01, // u16 300
                 0xFF, 0xFF, 0xFF, 0xFF, // i32 -1
-                0x78, 0x56, 0x34, 0x12, // u32 0x12345678 — the endianness vector
+                0x78, 0x56, 0x34, 0x12, // u32 0x12345678 - the endianness vector
                 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // i64 -1
                 0x01, 0, 0, 0, 0, 0, 0, 0, // u64 1
                 0x00, 0x00, 0xC0, 0x3F, // f32 1.5
                 0, 0, 0, 0, 0, 0, 0xF0, 0x3F, // f64 1.0
-                0x03, 0, 0, 0, 0xE4, 0xB8, 0xAD, // string "中" — 3 bytes, not 1 char
+                0x03, 0, 0, 0, 0xE4, 0xB8, 0xAD, // string "中" - 3 bytes, not 1 char
                 0x02, 0, 0, 0, 0xFF, 0xFE, // bytes
             },
             EncodeWith(value, EveryPrimitiveAllCodec.Encode));
@@ -292,7 +292,7 @@ public sealed class GeneratedTests
 
     // ============================================================== edge cases
 
-    /// <summary>§15 — a declared codec is generated even when no field joined it.</summary>
+    /// <summary>§15 - a declared codec is generated even when no field joined it.</summary>
     [Fact]
     public void ACodecNoFieldJoinedIsStillGenerated()
     {

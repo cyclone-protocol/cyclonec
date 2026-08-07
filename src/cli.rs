@@ -9,33 +9,36 @@ use std::path::PathBuf;
 
 /// The usage text, printed by `--help` and on a usage error.
 pub const USAGE: &str = "\
-cyclonec — the official Cyclone source generator
+cyclonec - the official Cyclone source generator
 
-Reads Cyclone attributes from Rust and C# sources and writes one
+Reads Cyclone attributes from Rust, C# and Go sources and writes one
 self-contained file per language, holding that language's Cyclone runtime and
 every codec the models declared. Nothing to import, nothing to add to
-Cargo.toml or your .csproj.
+Cargo.toml, your .csproj, or go.mod.
 
 USAGE:
     cyclonec --out <PATH> [OPTIONS] <PATH>...
 
 ARGS:
-    <PATH>...    Files, or directories to search recursively for `.rs` and
-                 `.cs` files. Each file's own extension picks its scanner —
-                 Rust's `#[network]` for `.rs`, C#'s `[Network]` for `.cs`.
+    <PATH>...    Files, or directories to search recursively for `.rs`, `.cs`
+                 and `.go` files. Each file's own extension picks its scanner
+                 - Rust's `#[network]` for `.rs`, C#'s `[Network]` for `.cs`,
+                 Go's `//cyclone:model` + struct tags for `.go`.
 
 OPTIONS:
     -o, --out <PATH>   Where to write. Required.
                          a path ending in `.rs`  →  Rust's exact file
                          a path ending in `.cs`  →  C#'s exact file
+                         a path ending in `.go`  →  Go's exact file
                          anything else           →  a directory, holding
-                                                    `cyclone.codec.rs` and/or
-                                                    `cyclone.codec.cs`
-                       If sources in the language the extension did not pick
-                       are also found, their output lands beside it (the
-                       same path with the other extension).
+                                                    `cyclone.codec.rs`,
+                                                    `cyclone.codec.cs` and/or
+                                                    `cyclone.codec.go`
+                       If sources in a language the extension did not pick
+                       are also found, that language's output lands beside it
+                       (the same path with its own extension in place).
         --check        Report an out-of-date output file without writing;
-                       exit 1 if it is stale. For CI.
+                       exit 1 if any is stale. For CI.
         --stdout       Print the generated code instead of writing it.
                        Replaces --out rather than joining it.
     -q, --quiet        Report only errors
@@ -43,7 +46,7 @@ OPTIONS:
     -V, --version      Print the version
 
 EXAMPLES:
-    cyclonec --out src/ src/                  → src/cyclone.codec.rs and/or .cs
+    cyclonec --out src/ src/                  → src/cyclone.codec.{rs,cs,go}
     cyclonec --out src/net.rs src/models.rs   → src/net.rs
     cyclonec --stdout src/                    → stdout
 
@@ -62,7 +65,7 @@ A model declares which codecs to generate; there is no flag for it. Rust:
     }
 
 The same schema, in C# (from the `cyclone-attributes` package, namespace
-`Cyclone`) — same codecs, same routing, same bytes on the wire:
+`Cyclone`) - same codecs, same routing, same bytes on the wire:
 
     [Network]
     [Codec(\"edge\", \"unity\")]
@@ -75,6 +78,17 @@ The same schema, in C# (from the `cyclone-attributes` package, namespace
         [Network(\"f32\")]
         [Codec(\"edge\")]
         public float Temperature { get; set; }
+    }
+
+And in Go, which has no attributes: a `//cyclone:model` comment directive
+names the model and its codecs, and `cyclone:\"...\"` / `codec:\"...\"` struct
+tags name each field's wire type and codec membership - same codecs, same
+routing, same bytes:
+
+    //cyclone:model codec=edge,unity
+    type DeviceState struct {
+        ID          uint32  `cyclone:\"u32\" codec:\"edge,unity\"`
+        Temperature float32 `cyclone:\"f32\" codec:\"edge\"`
     }
 ";
 
