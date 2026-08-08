@@ -22,6 +22,8 @@
 
 pub mod csharp;
 pub mod csharp_runtime;
+pub mod gdscript;
+pub mod gdscript_runtime;
 pub mod go;
 pub mod go_runtime;
 pub mod rust;

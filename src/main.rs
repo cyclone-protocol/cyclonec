@@ -91,20 +91,25 @@ fn run(arguments: &cli::Args) -> Result<ExitCode, String> {
     // Every source feeds one of three output files (one per language), so all
     // three destinations are resolved before anything is read: a run that
     // cannot write should not parse first.
-    let (rust_out, csharp_out, go_out) =
+    let (rust_out, csharp_out, go_out, gdscript_out) =
         match arguments.out.as_deref().map(resolve_outputs) {
-            Some((rust, csharp, go)) => (Some(rust), Some(csharp), Some(go)),
-            None => (None, None, None),
+            Some((rust, csharp, go, gdscript)) => {
+                (Some(rust), Some(csharp), Some(go), Some(gdscript))
+            }
+            None => (None, None, None, None),
         };
 
     let rust_file_name = file_name_of(rust_out.as_deref(), generator::rust::DEFAULT_FILE_NAME);
     let csharp_file_name =
         file_name_of(csharp_out.as_deref(), generator::csharp::DEFAULT_FILE_NAME);
     let go_file_name = file_name_of(go_out.as_deref(), generator::go::DEFAULT_FILE_NAME);
+    let gdscript_file_name =
+        file_name_of(gdscript_out.as_deref(), generator::gdscript::DEFAULT_FILE_NAME);
 
     let mut rust = Collected::default();
     let mut csharp = Collected::default();
     let mut go = Collected::default();
+    let mut gdscript = Collected::default();
     let mut go_package: Option<String> = None;
     let mut failures = 0;
 
@@ -120,6 +125,7 @@ fn run(arguments: &cli::Args) -> Result<ExitCode, String> {
                     Some(Language::Rust) => Some(&mut rust),
                     Some(Language::CSharp) => Some(&mut csharp),
                     Some(Language::Go) => Some(&mut go),
+                    Some(Language::GDScript) => Some(&mut gdscript),
                     None => None,
                 };
                 if let Some(collected) = collected {
@@ -138,6 +144,7 @@ fn run(arguments: &cli::Args) -> Result<ExitCode, String> {
                         Language::Rust => rust.models.push(model),
                         Language::CSharp => csharp.models.push(model),
                         Language::Go => go.models.push(model),
+                        Language::GDScript => gdscript.models.push(model),
                     }
                 }
             }
@@ -159,6 +166,7 @@ fn run(arguments: &cli::Args) -> Result<ExitCode, String> {
     model::check_nested_codecs(&rust.models)?;
     model::check_nested_codecs(&csharp.models)?;
     model::check_nested_codecs(&go.models)?;
+    model::check_nested_codecs(&gdscript.models)?;
 
     let rust_unit = generator::rust::render(&rust.source_names, &rust.models, &rust_file_name)
         .map(|contents| Unit { contents, output: rust_out, codecs: codec_names(&rust.models) });
@@ -173,8 +181,19 @@ fn run(arguments: &cli::Args) -> Result<ExitCode, String> {
         go_package.as_deref(),
     )
     .map(|contents| Unit { contents, output: go_out, codecs: codec_names(&go.models) });
+    let gdscript_unit = generator::gdscript::render(
+        &gdscript.source_names,
+        &gdscript.models,
+        &gdscript_file_name,
+    )
+    .map(|contents| Unit {
+        contents,
+        output: gdscript_out,
+        codecs: codec_names(&gdscript.models),
+    });
 
-    let units: Vec<Unit> = [rust_unit, csharp_unit, go_unit].into_iter().flatten().collect();
+    let units: Vec<Unit> =
+        [rust_unit, csharp_unit, go_unit, gdscript_unit].into_iter().flatten().collect();
 
     if units.is_empty() {
         if !arguments.quiet {
@@ -193,29 +212,46 @@ fn run(arguments: &cli::Args) -> Result<ExitCode, String> {
     write_all(&units, arguments.quiet)
 }
 
-/// Turns `--out` into a destination for each language: `(rust, csharp, go)`.
+/// Turns `--out` into a destination for each language: `(rust, csharp, go,
+/// gdscript)`.
 ///
 /// A path ending in one language's extension is that language's exact file,
-/// and the other two become the same path with their own extension in place
+/// and the other three become the same path with their own extension in place
 /// (used only if that language's models are actually present). Anything else -
-/// most commonly a directory - holds all three languages' default names side
+/// most commonly a directory - holds all four languages' default names side
 /// by side. The rule is the extension and not whether the path happens to
 /// exist, so a first run and a second run agree.
-fn resolve_outputs(out: &Path) -> (PathBuf, PathBuf, PathBuf) {
+fn resolve_outputs(out: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     match out.extension().and_then(|extension| extension.to_str()) {
-        Some(generator::rust::EXTENSION) => {
-            (out.to_path_buf(), out.with_extension("cs"), out.with_extension("go"))
-        }
-        Some(generator::csharp::EXTENSION) => {
-            (out.with_extension("rs"), out.to_path_buf(), out.with_extension("go"))
-        }
-        Some(generator::go::EXTENSION) => {
-            (out.with_extension("rs"), out.with_extension("cs"), out.to_path_buf())
-        }
+        Some(generator::rust::EXTENSION) => (
+            out.to_path_buf(),
+            out.with_extension("cs"),
+            out.with_extension("go"),
+            out.with_extension("gd"),
+        ),
+        Some(generator::csharp::EXTENSION) => (
+            out.with_extension("rs"),
+            out.to_path_buf(),
+            out.with_extension("go"),
+            out.with_extension("gd"),
+        ),
+        Some(generator::go::EXTENSION) => (
+            out.with_extension("rs"),
+            out.with_extension("cs"),
+            out.to_path_buf(),
+            out.with_extension("gd"),
+        ),
+        Some(generator::gdscript::EXTENSION) => (
+            out.with_extension("rs"),
+            out.with_extension("cs"),
+            out.with_extension("go"),
+            out.to_path_buf(),
+        ),
         _ => (
             out.join(generator::rust::DEFAULT_FILE_NAME),
             out.join(generator::csharp::DEFAULT_FILE_NAME),
             out.join(generator::go::DEFAULT_FILE_NAME),
+            out.join(generator::gdscript::DEFAULT_FILE_NAME),
         ),
     }
 }
@@ -277,6 +313,7 @@ fn is_source(path: &Path) -> bool {
     (name.ends_with(".rs") && !name.ends_with(".codec.rs"))
         || (name.ends_with(".cs") && !name.ends_with(".codec.cs"))
         || (name.ends_with(".go") && !name.ends_with(".codec.go"))
+        || (name.ends_with(".gd") && !name.ends_with(".codec.gd"))
 }
 
 fn codec_names(models: &[Model]) -> Vec<String> {

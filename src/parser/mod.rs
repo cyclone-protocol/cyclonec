@@ -26,6 +26,7 @@
 //! this is a scanner and not a substring search.
 
 pub mod csharp;
+pub mod gdscript;
 pub mod go;
 pub mod rust;
 
@@ -51,7 +52,8 @@ impl std::fmt::Display for Error {
 }
 
 /// Extracts every network model from `text`, choosing a scanner by `path`'s
-/// extension: `.cs` reads C#, `.go` reads Go, anything else reads Rust.
+/// extension: `.cs` reads C#, `.go` reads Go, `.gd` reads GDScript, anything
+/// else reads Rust.
 ///
 /// `path` is carried for error messages only; nothing reads it to decide
 /// content - the extension check is the one exception, and it exists only to
@@ -66,6 +68,7 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("cs") => csharp::parse(path, text),
         Some("go") => go::parse(path, text),
+        Some("gd") => gdscript::parse(path, text),
         _ => rust::parse(path, text),
     }
 }

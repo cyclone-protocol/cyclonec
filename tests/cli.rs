@@ -1661,3 +1661,573 @@ fn nested_codec_validation_does_not_cross_languages() {
     let go = std::fs::read_to_string(directory.join("cyclone.codec.go")).expect("read go");
     assert!(go.contains("PlayerInfoUnityCodec"));
 }
+
+// =============================================================== GDScript
+
+/// The GDScript counterpart of [`generate`] / [`generate_csharp`] /
+/// [`generate_go`]: writes `source` as `{name}.gd` and reads back
+/// `cyclone.codec.gd`.
+fn generate_gdscript(name: &str, source: &str) -> (Output, Option<String>) {
+    let directory = scratch(name);
+    let input = directory.join(format!("{name}.gd"));
+    std::fs::write(&input, source).expect("write source");
+
+    let output = cyclonec(&[
+        "--out",
+        directory.to_str().expect("utf-8 path"),
+        input.to_str().expect("utf-8 path"),
+    ]);
+    let generated = std::fs::read_to_string(directory.join("cyclone.codec.gd")).ok();
+
+    (output, generated)
+}
+
+/// A - parse model metadata: `# cyclone:model codec=godot` followed by
+/// `class_name` produces exactly the one codec declared.
+#[test]
+fn gdscript_basic_model() {
+    let (output, generated) = generate_gdscript(
+        "gd_basic",
+        "# cyclone:model codec=godot\n\
+         class_name Player\n\n\
+         # cyclone:u32 codec=godot\n\
+         var hp: int\n",
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    assert!(generated.starts_with("class_name CycloneCodec\n"));
+    assert!(generated.contains("class PlayerGodotCodec:"));
+    assert!(generated.contains("writer.write_u32(value.hp)"));
+    assert_eq!(generated.matches("Codec:").count(), 1);
+}
+
+/// B/C - field metadata, and a field naming more than one codec: `edge` and
+/// `godot` both carry `id`; only `edge` carries `temperature`; only `godot`
+/// carries `name`.
+#[test]
+fn gdscript_multiple_codecs() {
+    let (output, generated) = generate_gdscript(
+        "gd_multiple",
+        "# cyclone:model codec=edge,godot\n\
+         class_name DeviceState\n\n\
+         # cyclone:u32 codec=edge,godot\n\
+         var id: int\n\n\
+         # cyclone:f32 codec=edge\n\
+         var temperature: float\n\n\
+         # cyclone:string codec=godot\n\
+         var device_name: String\n",
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    let edge = extract_gdscript_method(&generated, "DeviceStateEdgeCodec", "encode");
+    assert!(edge.contains("value.id"));
+    assert!(edge.contains("value.temperature"));
+    assert!(!edge.contains("value.device_name"));
+
+    let godot = extract_gdscript_method(&generated, "DeviceStateGodotCodec", "encode");
+    assert!(godot.contains("value.id"));
+    assert!(godot.contains("value.device_name"));
+    assert!(!godot.contains("value.temperature"));
+}
+
+/// D - a field that names exactly one codec is written by that codec alone -
+/// covered above by `temperature`/`device_name`, pinned again on its own.
+#[test]
+fn gdscript_field_can_belong_to_a_single_codec() {
+    let (output, generated) = generate_gdscript(
+        "gd_single_codec",
+        "# cyclone:model codec=edge\n\
+         class_name Reading\n\n\
+         # cyclone:f32 codec=edge\n\
+         var value: float\n",
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+    assert!(generated.contains("ReadingEdgeCodec"));
+}
+
+/// E - a codec target the generator has never heard of needs no registration:
+/// it is opaque metadata, PascalCased into a type name, the same as `edge` or
+/// `godot` - never mistaken for a new Cyclone wire type. h.md's own point: an
+/// unrecognized target is still just a codec identifier, not a schema.
+#[test]
+fn gdscript_unknown_codec_target_needs_no_registration() {
+    let (output, generated) = generate_gdscript(
+        "gd_unknown_target",
+        "# cyclone:model codec=godot,unknown_engine\n\
+         class_name DeviceState\n\n\
+         # cyclone:u32 codec=godot,unknown_engine\n\
+         var id: int\n",
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    assert!(generated.contains("DeviceStateGodotCodec"));
+    assert!(generated.contains("DeviceStateUnknownEngineCodec"));
+}
+
+/// F - invalid metadata syntax: a directive argument that is neither empty
+/// nor `codec=...` is reported, not silently ignored.
+#[test]
+fn gdscript_malformed_directive_argument_is_an_error() {
+    let (output, _) = generate_gdscript(
+        "gd_malformed",
+        "# cyclone:model banana\n\
+         class_name Player\n\n\
+         # cyclone:u32\n\
+         var hp: int\n",
+    );
+
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("invalid # cyclone:model directive"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// F - a `# cyclone:model` not immediately followed by `class_name` is a
+/// reported error, never a silent skip - the GDScript counterpart of Go's
+/// "directive not followed by struct".
+#[test]
+fn gdscript_model_directive_not_followed_by_class_name_is_an_error() {
+    let (output, generated) = generate_gdscript(
+        "gd_orphan_model",
+        "# cyclone:model codec=edge\n\
+         func not_a_class() -> void:\n\
+         \tpass\n",
+    );
+
+    assert!(!output.status.success());
+    assert!(generated.is_none());
+    assert!(
+        stderr(&output).contains("must be immediately followed by a `class_name Name`"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// F - a field directive not immediately followed by `var` is the same kind
+/// of error.
+#[test]
+fn gdscript_field_directive_not_followed_by_var_is_an_error() {
+    let (output, generated) = generate_gdscript(
+        "gd_orphan_field",
+        "# cyclone:model codec=edge\n\
+         class_name Player\n\n\
+         # cyclone:u32\n\
+         func not_a_field() -> void:\n\
+         \tpass\n",
+    );
+
+    assert!(!output.status.success());
+    assert!(generated.is_none());
+    assert!(
+        stderr(&output).contains("must be immediately followed by a `var name`"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A field directive with no model yet open to attach it to is reported, not
+/// silently dropped.
+#[test]
+fn gdscript_field_directive_before_any_model_is_an_error() {
+    let (output, generated) = generate_gdscript(
+        "gd_field_before_model",
+        "# cyclone:u32\n\
+         var stray: int\n",
+    );
+
+    assert!(!output.status.success());
+    assert!(generated.is_none());
+    assert!(
+        stderr(&output).contains("no `# cyclone:model` / `class_name` has opened a model yet"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// Unlike Go's fixed-prefix `//cyclone:model` match (which treats
+/// `//cyclone:modeling` as an ordinary comment via a word-boundary check),
+/// GDScript's grammar has no such escape hatch: `cyclone:` is compared whole
+/// against a directive head, so anything after `# cyclone:` is *always* an
+/// attempted directive, never silently reinterpreted as an unrelated comment.
+/// `# cyclone:modeling this is not a directive` reads `modeling` as an
+/// attempted wire type and the rest as a malformed `codec=` argument, and is
+/// reported rather than ignored - stricter than Go on purpose: h.md is
+/// explicit that a malformed directive must never pass over in silence, and
+/// there is no way to tell "a typo for `# cyclone:model`" apart from "an
+/// ordinary comment that happens to start with `cyclone:`" without guessing.
+#[test]
+fn gdscript_anything_after_cyclone_colon_is_an_attempted_directive() {
+    let (output, generated) = generate_gdscript(
+        "gd_prefix_boundary",
+        "# cyclone:modeling this is not a directive\n\
+         class_name NotAModel\n\n\
+         var value: int\n",
+    );
+
+    assert!(!output.status.success());
+    assert!(generated.is_none());
+    assert!(
+        stderr(&output).contains("invalid # cyclone:modeling directive"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// Blank lines and ordinary (non-Cyclone) comments between a directive and
+/// its declaration do not break the association - the same leniency Go's
+/// token-based scanner has for free.
+#[test]
+fn gdscript_blank_lines_and_ordinary_comments_do_not_break_association() {
+    let (output, generated) = generate_gdscript(
+        "gd_leniency",
+        "# cyclone:model codec=edge\n\
+         \n\
+         # just an ordinary comment, not ours\n\
+         class_name Player\n\n\
+         # cyclone:u32 codec=edge\n\
+         \n\
+         # another ordinary comment\n\
+         var hp: int\n",
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+    assert!(generated.contains("PlayerEdgeCodec"));
+    assert!(generated.contains("writer.write_u32(value.hp)"));
+}
+
+/// A `class_name` nothing marks is not a model, and does not error - the same
+/// treatment an unmarked `struct`/`class`/`type` gets in the other three
+/// scanners.
+#[test]
+fn gdscript_unmarked_class_is_not_a_model() {
+    let (output, generated) = generate_gdscript(
+        "gd_unmarked",
+        "class_name Ignored\n\n\
+         var whatever: int\n",
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(generated.is_none(), "nothing marks Ignored, so nothing is generated");
+}
+
+/// G - nested model: a field whose wire type names another model that
+/// declares the same codec is resolved and generates the matching call.
+#[test]
+fn gdscript_nested_model_with_multiple_codecs_calls_the_matching_nested_codec() {
+    let directory = scratch("gd_nested_multi");
+    std::fs::write(
+        directory.join("player_info.gd"),
+        "# cyclone:model codec=edge,unity\n\
+         class_name PlayerInfo\n\n\
+         # cyclone:u32 codec=edge,unity\n\
+         var level: int\n",
+    )
+    .expect("write source");
+    std::fs::write(
+        directory.join("player.gd"),
+        "# cyclone:model codec=edge,unity\n\
+         class_name Player\n\n\
+         # cyclone:u32 codec=edge,unity\n\
+         var hp: int\n\n\
+         # cyclone:PlayerInfo codec=edge,unity\n\
+         var info: PlayerInfo\n",
+    )
+    .expect("write source");
+
+    let path = directory.to_str().expect("utf-8 path");
+    let output = cyclonec(&["--out", path, path]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let generated =
+        std::fs::read_to_string(directory.join("cyclone.codec.gd")).expect("read gdscript");
+
+    let edge = extract_gdscript_method(&generated, "PlayerEdgeCodec", "encode");
+    assert!(edge.contains("PlayerInfoEdgeCodec.new().encode"), "{edge}");
+    assert!(!edge.contains("PlayerInfoUnityCodec"), "{edge}");
+
+    let unity = extract_gdscript_method(&generated, "PlayerUnityCodec", "encode");
+    assert!(unity.contains("PlayerInfoUnityCodec.new().encode"), "{unity}");
+    assert!(!unity.contains("PlayerInfoEdgeCodec"), "{unity}");
+}
+
+/// A field routing a nested model into a codec the nested model itself never
+/// declared is a reported error, not a silently emitted dangling call - the
+/// GDScript counterpart of the same audit finding for the other three
+/// languages.
+#[test]
+fn gdscript_nested_codec_mismatch_is_a_reported_error() {
+    let directory = scratch("gd_nested_mismatch");
+    std::fs::write(
+        directory.join("player_info.gd"),
+        "# cyclone:model codec=edge,unity\n\
+         class_name PlayerInfo\n\n\
+         # cyclone:u32 codec=edge,unity\n\
+         var level: int\n",
+    )
+    .expect("write source");
+    std::fs::write(
+        directory.join("player.gd"),
+        "# cyclone:model codec=edge,orange_pi\n\
+         class_name Player\n\n\
+         # cyclone:u32 codec=edge,orange_pi\n\
+         var hp: int\n\n\
+         # cyclone:PlayerInfo codec=edge,orange_pi\n\
+         var info: PlayerInfo\n",
+    )
+    .expect("write source");
+
+    let path = directory.to_str().expect("utf-8 path");
+    let output = cyclonec(&["--out", path, path]);
+    assert!(!output.status.success());
+    assert!(!directory.join("cyclone.codec.gd").exists());
+
+    let message = stderr(&output);
+    assert!(message.contains("'Player'"), "{message}");
+    assert!(message.contains("'info'"), "{message}");
+    assert!(message.contains("'orange_pi'"), "{message}");
+    assert!(message.contains("'PlayerInfo'"), "{message}");
+}
+
+/// The generated file carries the runtime nested inside its own `class_name`
+/// wrapper, so it compiles with nothing added to the Godot project and
+/// nothing to `preload`.
+#[test]
+fn gdscript_output_carries_its_own_runtime_under_one_class_name() {
+    let (_, generated) = generate_gdscript(
+        "gd_selfcontained",
+        "# cyclone:model codec=edge\n\
+         class_name Player\n\n\
+         # cyclone:u32 codec=edge\n\
+         var hp: int\n",
+    );
+
+    let generated = generated.expect("a codec file");
+
+    assert!(generated.starts_with("class_name CycloneCodec\n"));
+    for item in ["class DecodeError:", "class Limits:", "class Writer:", "class Reader:"] {
+        assert!(generated.contains(item), "missing {item}");
+    }
+    // No `preload`/`load`: everything is reachable through the one
+    // class_name this file declares.
+    assert!(!generated.contains("preload("), "{generated}");
+    assert!(!generated.contains("load("), "{generated}");
+}
+
+/// h.md's own native-type-independence case: `# cyclone:u32` on a field
+/// declared `var id: float` (a deliberately mismatched native type) reports
+/// wire type `u32` regardless - checked against the generator's own output
+/// text, the same way the Go and C# counterparts are (no Godot compiler is
+/// available in this environment to additionally confirm Godot itself
+/// accepts the mismatched-looking source; see the final report).
+#[test]
+fn gdscript_native_type_does_not_change_the_wire_type() {
+    let (output, generated) = generate_gdscript(
+        "gd_native_type",
+        "# cyclone:model codec=edge\n\
+         class_name Reading\n\n\
+         # cyclone:u32 codec=edge\n\
+         var value: float\n",
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    assert!(generated.contains("writer.write_u32(value.value)"), "{generated}");
+    let encode = extract_gdscript_method(&generated, "ReadingEdgeCodec", "encode");
+    assert!(!encode.contains("write_f32"), "{encode}");
+}
+
+/// All four languages agree on codec names and field routing for the same
+/// schema.
+#[test]
+fn all_four_languages_agree_on_codec_names_for_the_same_schema() {
+    let (_, rust) = generate(
+        "parity4_rust",
+        r#"
+        #[network]
+        #[codec(edge, unity)]
+        struct DeviceState {
+            #[network(u32)]
+            #[codec(edge, unity)]
+            id: u32,
+            #[network(f32)]
+            #[codec(edge)]
+            temperature: f32,
+        }
+        "#,
+    );
+    let (_, csharp) = generate_csharp(
+        "parity4_csharp",
+        r#"
+        using Cyclone;
+
+        [Network]
+        [Codec("edge", "unity")]
+        public class DeviceState
+        {
+            [Network("u32")]
+            [Codec("edge", "unity")]
+            public uint Id { get; set; }
+
+            [Network("f32")]
+            [Codec("edge")]
+            public float Temperature { get; set; }
+        }
+        "#,
+    );
+    let (_, go) = generate_go(
+        "parity4_go",
+        "package models\n\n\
+         //cyclone:model codec=edge,unity\n\
+         type DeviceState struct {\n\
+         \tID          uint32  `cyclone:\"u32\" codec:\"edge,unity\"`\n\
+         \tTemperature float32 `cyclone:\"f32\" codec:\"edge\"`\n\
+         }\n",
+    );
+    let (_, gdscript) = generate_gdscript(
+        "parity4_gdscript",
+        "# cyclone:model codec=edge,unity\n\
+         class_name DeviceState\n\n\
+         # cyclone:u32 codec=edge,unity\n\
+         var id: int\n\n\
+         # cyclone:f32 codec=edge\n\
+         var temperature: float\n",
+    );
+
+    let rust = rust.expect("rust codec file");
+    let csharp = csharp.expect("csharp codec file");
+    let go = go.expect("go codec file");
+    let gdscript = gdscript.expect("gdscript codec file");
+
+    for name in ["DeviceStateEdgeCodec", "DeviceStateUnityCodec"] {
+        assert!(rust.contains(name), "{name} missing from Rust output");
+        assert!(csharp.contains(name), "{name} missing from C# output");
+        assert!(go.contains(name), "{name} missing from Go output");
+        assert!(gdscript.contains(name), "{name} missing from GDScript output");
+    }
+
+    assert!(!extract_fn(&rust, "DeviceStateUnityCodec", "encode").contains("temperature"));
+    assert!(!extract_method(&csharp, "DeviceStateUnityCodec", "Encode").contains("Temperature"));
+    assert!(!extract_go_method(&go, "DeviceStateUnityCodec", "Encode").contains("Temperature"));
+    assert!(
+        !extract_gdscript_method(&gdscript, "DeviceStateUnityCodec", "encode")
+            .contains("temperature")
+    );
+}
+
+/// h.md §11.H - cross-target byte compatibility.
+///
+/// **What this test can and cannot prove.** There is no `godot`/`godot4`
+/// binary in this environment (no network access to install one either), so
+/// nothing here can actually execute the generated GDScript the way
+/// `tests/generated.rs` executes the generated *Rust* (compiling it with
+/// `rustc` and running real `encode`/`decode` calls) or the way `go test` /
+/// `dotnet test` do for Go and C#. A "Rust encode → Cyclone bytes → Godot
+/// decode" round trip through a live Godot process could not be attempted,
+/// let alone verified, and claiming otherwise would be dishonest - see the
+/// final report's "known limitations" section.
+///
+/// What *is* checked, and is the closest honest substitute: the exact golden
+/// byte vector `tests/generated.rs::each_codec_writes_the_fields_that_named_it`
+/// already proves real `rustc`-compiled Rust produces for `DeviceState { id:
+/// 42, temperature: 21.5 }` under RFC-0002 (`u32` id then `f32` temperature,
+/// Little Endian, no padding) is reproduced here as the literal call sequence
+/// `cyclonec` generates for the *same schema* in GDScript -
+/// `write_u32(value.id)` then `write_f32(value.temperature)`, in that order,
+/// nothing between them. [`super::gdscript_runtime::RUNTIME`]'s `write_u32`/
+/// `write_f32` are themselves argued, in that module's own docs, to produce
+/// the identical Little Endian RFC-0002 bytes via `PackedByteArray`'s
+/// verified-by-source (not by execution here) `encode_u32`/`encode_float`.
+/// Chaining "same call sequence" with "each call is documented/sourced to
+/// produce the same bytes" is a structural proof, not an executed one - the
+/// gap a real Godot run would close.
+#[test]
+fn gdscript_generated_call_sequence_matches_the_rust_golden_byte_schema() {
+    let (output, generated) = generate_gdscript(
+        "gd_golden",
+        "# cyclone:model codec=edge\n\
+         class_name DeviceState\n\n\
+         # cyclone:u32 codec=edge\n\
+         var id: int\n\n\
+         # cyclone:f32 codec=edge\n\
+         var temperature: float\n",
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = generated.expect("a codec file");
+
+    let encode = extract_gdscript_method(&generated, "DeviceStateEdgeCodec", "encode");
+    let id_at = encode.find("writer.write_u32(value.id)").unwrap_or_else(|| {
+        panic!("write_u32(value.id) not found in:\n{encode}")
+    });
+    let temperature_at =
+        encode.find("writer.write_f32(value.temperature)").unwrap_or_else(|| {
+            panic!("write_f32(value.temperature) not found in:\n{encode}")
+        });
+    assert!(
+        id_at < temperature_at,
+        "id must be written before temperature - RFC-0002 has no padding or reordering:\n{encode}"
+    );
+
+    // The decode side reads the identical two fields, in the identical
+    // order, through the identical primitive names - the other half of the
+    // same golden byte vector.
+    let decode = extract_gdscript_method(&generated, "DeviceStateEdgeCodec", "decode");
+    let id_read_at = decode
+        .find("reader.read_u32()")
+        .unwrap_or_else(|| panic!("read_u32() not found in:\n{decode}"));
+    let temperature_read_at = decode
+        .find("reader.read_f32()")
+        .unwrap_or_else(|| panic!("read_f32() not found in:\n{decode}"));
+    assert!(id_read_at < temperature_read_at, "{decode}");
+}
+
+// ============================================================ GDScript - helpers
+
+/// Extracts the body of one method (`encode`/`decode`) inside one `class
+/// Name:` block (column 0 - see [`super::gdscript::WRAPPER_CLASS_NAME`] for
+/// why it is not textually nested under `class_name`) from generated
+/// GDScript text - enough to check which fields a codec touches, without a
+/// real GDScript parser. Mirrors [`extract_go_method`] / [`extract_method`],
+/// adapted to GDScript's indentation-delimited (rather than
+/// brace-delimited) bodies: a method body ends at the next line back out to
+/// one-tab (`\n\tfunc `) or column-0 (`\nclass ` / `\n# `) indentation, or
+/// at end of file.
+fn extract_gdscript_method<'a>(source: &'a str, type_name: &str, method_name: &str) -> &'a str {
+    let class_needle = format!("class {type_name}:");
+    let class_at = source
+        .find(&class_needle)
+        .unwrap_or_else(|| panic!("{class_needle} not found in:\n{source}"));
+
+    let method_needle = format!("func {method_name}(");
+    let method_at = source[class_at..]
+        .find(&method_needle)
+        .unwrap_or_else(|| panic!("{method_needle} not found in {type_name}"))
+        + class_at;
+
+    // The signature line ends at its own trailing `:` (its return type
+    // annotation, `-> void:` or `-> DecodeError:`) immediately before the
+    // newline - every other `:` on the line is followed by a space, not a
+    // newline.
+    let body_start = source[method_at..].find(":\n").unwrap() + method_at + 2;
+
+    let rest = &source[body_start..];
+    let body_end = ["\n\tfunc ", "\nclass ", "\n# "]
+        .iter()
+        .filter_map(|needle| rest.find(needle))
+        .min()
+        .unwrap_or(rest.len());
+
+    &source[body_start..body_start + body_end]
+}

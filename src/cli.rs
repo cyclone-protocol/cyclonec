@@ -11,29 +11,33 @@ use std::path::PathBuf;
 pub const USAGE: &str = "\
 cyclonec - the official Cyclone source generator
 
-Reads Cyclone attributes from Rust, C# and Go sources and writes one
+Reads Cyclone attributes from Rust, C#, Go and GDScript sources and writes one
 self-contained file per language, holding that language's Cyclone runtime and
 every codec the models declared. Nothing to import, nothing to add to
-Cargo.toml, your .csproj, or go.mod.
+Cargo.toml, your .csproj, go.mod, or your Godot project.
 
 USAGE:
     cyclonec --out <PATH> [OPTIONS] <PATH>...
 
 ARGS:
-    <PATH>...    Files, or directories to search recursively for `.rs`, `.cs`
-                 and `.go` files. Each file's own extension picks its scanner
-                 - Rust's `#[network]` for `.rs`, C#'s `[Network]` for `.cs`,
-                 Go's `//cyclone:model` + struct tags for `.go`.
+    <PATH>...    Files, or directories to search recursively for `.rs`, `.cs`,
+                 `.go` and `.gd` files. Each file's own extension picks its
+                 scanner - Rust's `#[network]` for `.rs`, C#'s `[Network]` for
+                 `.cs`, Go's `//cyclone:model` + struct tags for `.go`,
+                 GDScript's `# cyclone:model` / `# cyclone:TYPE` comment
+                 directives for `.gd`.
 
 OPTIONS:
     -o, --out <PATH>   Where to write. Required.
                          a path ending in `.rs`  →  Rust's exact file
                          a path ending in `.cs`  →  C#'s exact file
                          a path ending in `.go`  →  Go's exact file
+                         a path ending in `.gd`  →  GDScript's exact file
                          anything else           →  a directory, holding
                                                     `cyclone.codec.rs`,
-                                                    `cyclone.codec.cs` and/or
-                                                    `cyclone.codec.go`
+                                                    `cyclone.codec.cs`,
+                                                    `cyclone.codec.go` and/or
+                                                    `cyclone.codec.gd`
                        If sources in a language the extension did not pick
                        are also found, that language's output lands beside it
                        (the same path with its own extension in place).
@@ -90,6 +94,20 @@ routing, same bytes:
         ID          uint32  `cyclone:\"u32\" codec:\"edge,unity\"`
         Temperature float32 `cyclone:\"f32\" codec:\"edge\"`
     }
+
+And in GDScript, which has no attribute syntax Godot's own compiler accepts
+for arbitrary metadata: a `# cyclone:model` comment directive names the model
+and its codecs, and a `# cyclone:TYPE` comment directive names the field right
+below it - same codecs, same routing, same bytes:
+
+    # cyclone:model codec=edge,unity
+    class_name DeviceState
+
+    # cyclone:u32 codec=edge,unity
+    var id: int
+
+    # cyclone:f32 codec=edge
+    var temperature: float
 ";
 
 /// What the generator was asked to do.

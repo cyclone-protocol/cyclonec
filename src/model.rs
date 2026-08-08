@@ -36,6 +36,11 @@ pub enum Language {
     /// Read from a `//cyclone:model` comment directive and `cyclone:"..."` /
     /// `codec:"..."` struct tags in a `.go` file.
     Go,
+    /// Read from `# cyclone:model` / `# cyclone:TYPE` comment directives in a
+    /// `.gd` file. GDScript has no attribute syntax the compiler recognizes for
+    /// arbitrary user metadata (an unrecognized `@` annotation is a parse
+    /// error), so - like Go - Cyclone metadata lives in a comment.
+    GDScript,
 }
 
 /// A struct (or, in C#, a struct or class) marked as a Cyclone network model.
