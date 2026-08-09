@@ -55,7 +55,7 @@
 //! an `Object`, which - like a Rust `&mut` or a Go pointer, and unlike a C#
 //! property - is already a reference the callee can fill in place.
 
-use crate::model::{pascal_case, Field, Model};
+use crate::model::{array_element_type, pascal_case, Field, Model};
 
 /// The runtime method each network type maps to.
 ///
@@ -194,9 +194,19 @@ fn codec_type(out: &mut String, model: &Model, codec: &str) {
     }
 }
 
-/// Emits one encode statement.
+/// Emits one encode statement - or, for `Array<T>`, a small block: the
+/// element count, then a `for` loop writing each one. `T` may be a
+/// primitive or another model; either way the array's own codec never
+/// comes up, because there is no such thing - only `T`'s.
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let name = &field.name;
+
+    if let Some(element_type) = array_element_type(&field.network_type) {
+        out.push_str(&format!("writer.write_array_count(value.{name}.size())\n"));
+        out.push_str(&format!("\t\tfor element in value.{name}:\n\t\t\t"));
+        encode_value(out, element_type, "element", codec);
+        return;
+    }
 
     match primitive(&field.network_type) {
         Some((writer_method, _)) => {
@@ -211,6 +221,21 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
     }
 }
 
+/// Writes one array element, already bound to the `for` loop's own
+/// `element` - the same primitive-or-nested-model split [`encode_field`]
+/// does for a bare field, applied to an element instead of `value.{name}`.
+fn encode_value(out: &mut String, element_type: &str, var: &str, codec: &str) {
+    match primitive(element_type) {
+        Some((writer_method, _)) => {
+            out.push_str(&format!("writer.{writer_method}({var})"));
+        }
+        None => {
+            let nested = codec_name(element_type, codec);
+            out.push_str(&format!("{nested}.new().encode(writer, {var})"));
+        }
+    }
+}
+
 /// Emits the statements that decode one field, ending in a newline.
 ///
 /// A primitive reads through the `[value, error]` pair every `Reader` method
@@ -219,8 +244,45 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
 /// of a multi-value destructuring assignment. A nested model's field already
 /// holds the instance it decodes into, the same way a Rust `&mut` or a Go
 /// pointer does - no C#-style local-variable round trip needed.
+///
+/// `Array<T>` reads its element count first - through the same `[value,
+/// error]` pair, checked against `limits.max_array_count` before a single
+/// element is read - then fills a fresh untyped `[]` in a loop. A nested
+/// model element has no field to decode in place (there is no element yet
+/// to reuse, unlike a bare nested field), so it default-constructs one
+/// first via `.new()` - the same requirement a bare nested field already
+/// has, just paid once per element instead of once for the field.
 fn decode_field(out: &mut String, field: &Field, codec: &str) {
     let name = &field.name;
+
+    if let Some(element_type) = array_element_type(&field.network_type) {
+        out.push_str(&format!("\t\tvar {name}_count_result := reader.read_array_count()\n"));
+        out.push_str(&format!("\t\tif {name}_count_result[1] != null:\n"));
+        out.push_str(&format!("\t\t\treturn {name}_count_result[1]\n"));
+        out.push_str(&format!("\t\tvar {name}_elements := []\n"));
+        out.push_str(&format!("\t\tfor i in range({name}_count_result[0]):\n"));
+
+        match primitive(element_type) {
+            Some((_, reader_method)) => {
+                out.push_str(&format!("\t\t\tvar element_result = reader.{reader_method}()\n"));
+                out.push_str("\t\t\tif element_result[1] != null:\n");
+                out.push_str("\t\t\t\treturn element_result[1]\n");
+                out.push_str(&format!("\t\t\t{name}_elements.append(element_result[0])\n"));
+            }
+            None => {
+                let nested = codec_name(element_type, codec);
+                out.push_str(&format!("\t\t\tvar element = {element_type}.new()\n"));
+                out.push_str(&format!(
+                    "\t\t\tvar element_error = {nested}.new().decode(reader, element)\n"
+                ));
+                out.push_str("\t\t\tif element_error != null:\n");
+                out.push_str("\t\t\t\treturn element_error\n");
+                out.push_str(&format!("\t\t\t{name}_elements.append(element)\n"));
+            }
+        }
+        out.push_str(&format!("\t\tvalue.{name} = {name}_elements\n"));
+        return;
+    }
 
     match primitive(&field.network_type) {
         Some((_, reader_method)) => {

@@ -73,6 +73,11 @@ pub struct Limits {
     pub max_string_len: usize,
     /// Largest accepted byte length of a `bytes` blob.
     pub max_bytes_len: usize,
+    /// Largest accepted element count of an `Array<T>` (RFC-0002 §6). A
+    /// `u32` count can claim up to 4 GiB of elements before a single one is
+    /// even read, so this guards allocation the same way the string/bytes
+    /// limits do.
+    pub max_array_count: usize,
 }
 
 #[allow(dead_code)]
@@ -81,6 +86,7 @@ impl Limits {
     pub const UNLIMITED: Limits = Limits {
         max_string_len: u32::MAX as usize,
         max_bytes_len: u32::MAX as usize,
+        max_array_count: u32::MAX as usize,
     };
 }
 
@@ -216,6 +222,17 @@ impl Writer {
     pub fn write_bytes(&mut self, value: &[u8]) {
         self.write_len(value.len());
         self.buf.extend_from_slice(value);
+    }
+
+    /// Writes an `Array<T>`'s element count (RFC-0002 §6) - the caller
+    /// writes each element itself, in order, right after.
+    ///
+    /// # Panics
+    ///
+    /// If `count` is longer than `u32::MAX`, which the wire format cannot
+    /// represent.
+    pub fn write_array_count(&mut self, count: usize) {
+        self.write_len(count);
     }
 
     fn write_len(&mut self, len: usize) {
@@ -389,6 +406,14 @@ impl<'a> Reader<'a> {
                 ::core::result::Result::Err(error)
             }
         }
+    }
+
+    /// Reads an `Array<T>`'s element count (RFC-0002 §6), checked against
+    /// [`Limits::max_array_count`] before the caller reads a single
+    /// element - the same allocation guard [`Reader::read_string`] and
+    /// [`Reader::read_bytes`] apply to their own length prefix.
+    pub fn read_array_count(&mut self) -> ::core::result::Result<usize, DecodeError> {
+        self.read_len(self.limits.max_array_count)
     }
 
     /// Reads a `u32` length prefix and checks it against `limit`.
@@ -580,6 +605,53 @@ impl PlayerEdgeCodec {
         value.hp = reader.read_u32()?;
         value.speed = reader.read_f32()?;
         PlayerInfoEdgeCodec::decode(reader, &mut value.info)?;
+        Ok(())
+    }
+}
+
+/// The `edge` codec for [`Team`], generated from its Cyclone attributes.
+pub struct TeamEdgeCodec;
+
+impl TeamEdgeCodec {
+    /// Writes the `edge` fields of `value`, in declaration order.
+    pub fn encode(writer: &mut Writer, value: &Team) {
+        writer.write_array_count(value.scores.len());
+        for element in value.scores.iter() {
+            writer.write_u32(*element);
+        }
+        writer.write_array_count(value.names.len());
+        for element in value.names.iter() {
+            writer.write_string(element);
+        }
+        writer.write_array_count(value.players.len());
+        for element in value.players.iter() {
+            PlayerInfoEdgeCodec::encode(writer, element);
+        }
+    }
+
+    /// Reads the `edge` fields into `value`, in declaration order.
+    ///
+    /// Fields this codec does not carry are left as they were, which is what
+    /// lets one model be split across several codecs.
+    pub fn decode(reader: &mut Reader, value: &mut Team) -> Result<(), DecodeError> {
+        let array_count = reader.read_array_count()?;
+        let mut elements = ::std::vec::Vec::with_capacity(array_count.min(4096));
+        for _ in 0..array_count {
+            elements.push(reader.read_u32()?);
+        }
+        value.scores = elements;
+        let array_count = reader.read_array_count()?;
+        let mut elements = ::std::vec::Vec::with_capacity(array_count.min(4096));
+        for _ in 0..array_count {
+            elements.push(reader.read_string()?);
+        }
+        value.names = elements;
+        let array_count = reader.read_array_count()?;
+        let mut elements = ::std::vec::Vec::with_capacity(array_count.min(4096));
+        for _ in 0..array_count {
+            elements.push({ let mut element = <PlayerInfo as ::core::default::Default>::default(); PlayerInfoEdgeCodec::decode(reader, &mut element)?; element });
+        }
+        value.players = elements;
         Ok(())
     }
 }

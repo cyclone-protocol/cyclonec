@@ -23,30 +23,34 @@
 //! `package` its models live in, or nothing in it will resolve. See
 //! [`render`]'s `package_name` parameter.
 
-use crate::model::{pascal_case, Field, Model};
+use crate::model::{array_element_type, pascal_case, Field, Model};
 
-/// The runtime method each network type maps to.
+/// The runtime method each network type maps to, and the Go type it reads
+/// or writes - the fourth column matters only for `Array<T>` (see
+/// [`decode_field`]), which needs `T`'s Go spelling to declare the `[]T`
+/// slice it builds; a bare field never needs it, since `value.{name}`
+/// already has whatever type the field was declared with.
 ///
 /// Every name in this table comes from RFC-0002's Reader / Writer interface,
 /// spelled the way [`super::go_runtime`] spells it - and the way h.md §10's own
 /// example spells it (`WriteU32`/`ReadU32`, not `WriteUInt32`). A name that is
 /// not in it is not looked up, resolved, or imported - it is another model, and
 /// the call is spelled and left for the Go compiler to resolve or reject.
-const PRIMITIVES: &[(&str, &str, &str)] = &[
-    // (network type, writer method, reader method)
-    ("bool", "WriteBool", "ReadBool"),
-    ("i8", "WriteI8", "ReadI8"),
-    ("u8", "WriteU8", "ReadU8"),
-    ("i16", "WriteI16", "ReadI16"),
-    ("u16", "WriteU16", "ReadU16"),
-    ("i32", "WriteI32", "ReadI32"),
-    ("u32", "WriteU32", "ReadU32"),
-    ("i64", "WriteI64", "ReadI64"),
-    ("u64", "WriteU64", "ReadU64"),
-    ("f32", "WriteF32", "ReadF32"),
-    ("f64", "WriteF64", "ReadF64"),
-    ("string", "WriteString", "ReadString"),
-    ("bytes", "WriteBytes", "ReadBytes"),
+const PRIMITIVES: &[(&str, &str, &str, &str)] = &[
+    // (network type, writer method, reader method, Go type)
+    ("bool", "WriteBool", "ReadBool", "bool"),
+    ("i8", "WriteI8", "ReadI8", "int8"),
+    ("u8", "WriteU8", "ReadU8", "uint8"),
+    ("i16", "WriteI16", "ReadI16", "int16"),
+    ("u16", "WriteU16", "ReadU16", "uint16"),
+    ("i32", "WriteI32", "ReadI32", "int32"),
+    ("u32", "WriteU32", "ReadU32", "uint32"),
+    ("i64", "WriteI64", "ReadI64", "int64"),
+    ("u64", "WriteU64", "ReadU64", "uint64"),
+    ("f32", "WriteF32", "ReadF32", "float32"),
+    ("f64", "WriteF64", "ReadF64", "float64"),
+    ("string", "WriteString", "ReadString", "string"),
+    ("bytes", "WriteBytes", "ReadBytes", "[]byte"),
 ];
 
 /// The name of the generated file when the output path names a directory.
@@ -161,12 +165,23 @@ fn codec_type(out: &mut String, model: &Model, codec: &str) {
     out.push_str("}\n");
 }
 
-/// Emits one encode statement.
+/// Emits one encode statement - or, for `Array<T>`, a small block: the
+/// element count, then a `range` loop writing each one. `T` may be a
+/// primitive or another model; either way the array's own codec never
+/// comes up, because there is no such thing - only `T`'s.
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let name = &field.name;
 
+    if let Some(element_type) = array_element_type(&field.network_type) {
+        out.push_str(&format!("w.WriteArrayCount(len(value.{name}))\n"));
+        out.push_str(&format!("\tfor _, element := range value.{name} {{\n\t\t"));
+        encode_value(out, element_type, "element", codec);
+        out.push_str("\n\t}");
+        return;
+    }
+
     match primitive(&field.network_type) {
-        Some((writer_method, _)) => {
+        Some((writer_method, ..)) => {
             out.push_str(&format!("w.{writer_method}(value.{name})"));
         }
         // A model. The codec carries over, so a nested model is written by the
@@ -178,6 +193,21 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
     }
 }
 
+/// Writes one array element, already bound to the `range` loop's own
+/// `element` - the same primitive-or-nested-model split [`encode_field`]
+/// does for a bare field, applied to an element instead of `value.{name}`.
+fn encode_value(out: &mut String, element_type: &str, var: &str, codec: &str) {
+    match primitive(element_type) {
+        Some((writer_method, ..)) => {
+            out.push_str(&format!("w.{writer_method}({var})"));
+        }
+        None => {
+            let nested = codec_name(element_type, codec);
+            out.push_str(&format!("({nested}{{}}).Encode(w, &{var})"));
+        }
+    }
+}
+
 /// Emits the statements that decode one field.
 ///
 /// A primitive is one assignment through the shared `err` local, checked
@@ -185,11 +215,48 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
 /// takes the field's address directly: unlike a C# property, a Go struct field
 /// reached through a pointer is addressable, so no local-variable workaround is
 /// needed here.
+///
+/// `Array<T>` reads its element count first - through the same shared `err`,
+/// checked against [`Limits.MaxArrayCount`] before a single element is read -
+/// then fills a fresh `[]T` in a loop, checking `err` after every element the
+/// same way a bare field does.
 fn decode_field(out: &mut String, field: &Field, codec: &str) {
     let name = &field.name;
 
+    if let Some(element_type) = array_element_type(&field.network_type) {
+        let count_local = format!("{}Count", local_name(name));
+        let elements_local = format!("{}Elements", local_name(name));
+        let go_type = go_type_name(element_type);
+
+        out.push_str(&format!("\t{count_local}, err := r.ReadArrayCount()\n"));
+        out.push_str("\tif err != nil {\n\t\treturn err\n\t}\n");
+        out.push_str(&format!(
+            "\t{elements_local} := make([]{go_type}, 0, {count_local})\n"
+        ));
+        out.push_str(&format!("\tfor i := 0; i < {count_local}; i++ {{\n"));
+
+        match primitive(element_type) {
+            Some((_, reader_method, _)) => {
+                out.push_str(&format!("\t\tvar element {go_type}\n"));
+                out.push_str(&format!("\t\telement, err = r.{reader_method}()\n"));
+            }
+            None => {
+                let nested = codec_name(element_type, codec);
+                out.push_str(&format!("\t\tvar element {element_type}\n"));
+                out.push_str(&format!("\t\terr = ({nested}{{}}).Decode(r, &element)\n"));
+            }
+        }
+        out.push_str("\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n");
+        out.push_str(&format!(
+            "\t\t{elements_local} = append({elements_local}, element)\n"
+        ));
+        out.push_str("\t}\n");
+        out.push_str(&format!("\tvalue.{name} = {elements_local}\n"));
+        return;
+    }
+
     match primitive(&field.network_type) {
-        Some((_, reader_method)) => {
+        Some((_, reader_method, _)) => {
             out.push_str(&format!("\tvalue.{name}, err = r.{reader_method}()\n"));
         }
         None => {
@@ -206,9 +273,30 @@ fn codec_name(model: &str, codec: &str) -> String {
 }
 
 /// Looks a network type up in [`PRIMITIVES`].
-fn primitive(network_type: &str) -> Option<(&'static str, &'static str)> {
+fn primitive(network_type: &str) -> Option<(&'static str, &'static str, &'static str)> {
     PRIMITIVES
         .iter()
         .find(|(name, ..)| *name == network_type)
-        .map(|(_, writer, reader)| (*writer, *reader))
+        .map(|(_, writer, reader, go_type)| (*writer, *reader, *go_type))
+}
+
+/// `T`'s Go type name for `Array<T>`'s `[]T` slice - the primitive table's
+/// own spelling, or (for a nested model) the model's own name, unchanged:
+/// `cyclonec` never invents a type name, only ever spells one back that
+/// either this table or the source already named.
+fn go_type_name(element_type: &str) -> &str {
+    primitive(element_type).map_or(element_type, |(_, _, go_type)| go_type)
+}
+
+/// A local variable name that cannot collide with `w`, `r`, `value`, `err`,
+/// or another field's temporary in the same method - the Go counterpart of
+/// the identical helper in [`super::csharp`].
+fn local_name(field_name: &str) -> String {
+    let mut chars = field_name.chars();
+    let mut local = match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>(),
+        None => String::new(),
+    };
+    local.push_str(chars.as_str());
+    local
 }

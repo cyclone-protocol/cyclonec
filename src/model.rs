@@ -118,8 +118,15 @@ pub fn check_nested_codecs(models: &[Model]) -> Result<(), String> {
     for model in models {
         for codec in &model.codecs {
             for field in model.fields_in(codec) {
+                // `Array<PlayerInfo>` routes exactly like a bare
+                // `PlayerInfo` field would - the element type is what must
+                // declare the codec, not the string `"Array<PlayerInfo>"`
+                // itself, which no model is ever named.
+                let element_type = array_element_type(&field.network_type)
+                    .unwrap_or(field.network_type.as_str());
+
                 let Some(referenced) =
-                    models.iter().find(|candidate| candidate.name == field.network_type)
+                    models.iter().find(|candidate| candidate.name == element_type)
                 else {
                     // Not a model this run parsed - a primitive, or a type
                     // defined elsewhere. Left to the host compiler, same as
@@ -152,6 +159,27 @@ pub fn check_nested_codecs(models: &[Model]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// If `network_type` is the array composite `Array<T>` (RFC-0002 §6), the
+/// element type `T`. `None` for anything else, including a malformed
+/// `Array<` with no closing `>` or an empty `Array<>` - a malformed type
+/// name is a generator's own validation to report, not this shared helper's
+/// to guess at.
+///
+/// Every scanner captures a field's network type as an opaque string (see
+/// this module's own header) and never interprets it - this is the one
+/// exception, needed so `Array<u32>` can be told apart from a nested
+/// model's bare name, `PlayerInfo`, by [`check_nested_codecs`] and by each
+/// generator's own field codegen alike, without four separate copies of the
+/// same string-slicing.
+pub fn array_element_type(network_type: &str) -> Option<&str> {
+    let inner = network_type.strip_prefix("Array<")?.strip_suffix('>')?;
+    if inner.is_empty() {
+        None
+    } else {
+        Some(inner)
+    }
 }
 
 /// Turns a codec identifier into the PascalCase fragment of a generated name.

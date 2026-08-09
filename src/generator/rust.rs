@@ -27,7 +27,7 @@
 //! and differ only in the syntax and the runtime method names they write - see
 //! that module's header for the shared contract.
 
-use crate::model::{pascal_case, Field, Model};
+use crate::model::{array_element_type, pascal_case, Field, Model};
 
 /// The runtime method each network type maps to, and whether it is written by
 /// reference.
@@ -161,9 +161,20 @@ fn codec_type(out: &mut String, model: &Model, codec: &str) {
     out.push_str("}\n");
 }
 
-/// One encode statement.
+/// One encode statement - or, for `Array<T>`, a small block: the element
+/// count, then a loop writing each one. `T` may be a primitive or another
+/// model; either way the array's own codec never comes up, because there is
+/// no such thing - only `T`'s.
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let name = &field.name;
+
+    if let Some(element_type) = array_element_type(&field.network_type) {
+        out.push_str(&format!("writer.write_array_count(value.{name}.len());\n"));
+        out.push_str(&format!("        for element in value.{name}.iter() {{\n            "));
+        encode_value(out, element_type, "element", codec);
+        out.push_str("\n        }");
+        return;
+    }
 
     match primitive(&field.network_type) {
         Some((writer_method, _, by_reference)) => {
@@ -179,9 +190,50 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
     }
 }
 
-/// One decode statement.
+/// Writes one array element, already bound to `expr` (a `&T`, from the
+/// loop's own `element`) - the same primitive-or-nested-model split
+/// [`encode_field`] does for a bare field, applied to an element instead of
+/// `value.{name}`.
+fn encode_value(out: &mut String, element_type: &str, expr: &str, codec: &str) {
+    match primitive(element_type) {
+        Some((writer_method, _, by_reference)) => {
+            // `expr` is already a reference (the loop variable from
+            // `.iter()`): a by-reference primitive (`string`/`bytes`) needs
+            // no further `&`, and a by-value one needs a deref to get back
+            // to the `T` its `write_*` method actually takes.
+            if by_reference {
+                out.push_str(&format!("writer.{writer_method}({expr});"));
+            } else {
+                out.push_str(&format!("writer.{writer_method}(*{expr});"));
+            }
+        }
+        None => {
+            let nested = codec_name(element_type, codec);
+            out.push_str(&format!("{nested}::encode(writer, {expr});"));
+        }
+    }
+}
+
+/// One decode statement - or, for `Array<T>`, a small block: the element
+/// count (checked against [`Limits::max_array_count`] before a single
+/// element is read), then a loop reading each one into a fresh `Vec`.
 fn decode_field(out: &mut String, field: &Field, codec: &str) {
     let name = &field.name;
+
+    if let Some(element_type) = array_element_type(&field.network_type) {
+        out.push_str("let array_count = reader.read_array_count()?;\n");
+        out.push_str(
+            "        let mut elements = ::std::vec::Vec::with_capacity(array_count.min(4096));\n",
+        );
+        out.push_str("        for _ in 0..array_count {\n");
+        out.push_str(&format!(
+            "            elements.push({});\n",
+            decode_value(element_type, codec)
+        ));
+        out.push_str("        }\n");
+        out.push_str(&format!("        value.{name} = elements;"));
+        return;
+    }
 
     match primitive(&field.network_type) {
         Some((_, reader_method, _)) => {
@@ -190,6 +242,26 @@ fn decode_field(out: &mut String, field: &Field, codec: &str) {
         None => {
             let nested = codec_name(&field.network_type, codec);
             out.push_str(&format!("{nested}::decode(reader, &mut value.{name})?;"));
+        }
+    }
+}
+
+/// An expression producing one decoded array element. A primitive reads
+/// straight through its `Reader` method; a nested model has no field to
+/// decode in place (there is no element yet to reuse, unlike a bare nested
+/// field - see [`decode_field`]), so it default-constructs one first. This
+/// is the one place `Array<T>` requires something a bare `T` field does
+/// not: `T: Default`, the same requirement every model in this project's
+/// own fixtures already satisfies by deriving it.
+fn decode_value(element_type: &str, codec: &str) -> String {
+    match primitive(element_type) {
+        Some((_, reader_method, _)) => format!("reader.{reader_method}()?"),
+        None => {
+            let nested = codec_name(element_type, codec);
+            format!(
+                "{{ let mut element = <{element_type} as ::core::default::Default>::default(); \
+                 {nested}::decode(reader, &mut element)?; element }}"
+            )
         }
     }
 }

@@ -61,11 +61,18 @@ public struct Limits
     /// Largest accepted byte length of a `bytes` blob.
     public long MaxBytesLength;
 
+    /// Largest accepted element count of an `Array<T>` (RFC-0002 §6). A
+    /// `u32` count can claim up to 4 GiB of elements before a single one is
+    /// even read, so this guards allocation the same way the string/bytes
+    /// limits do.
+    public long MaxArrayCount;
+
     /// The permissive default: `uint.MaxValue` for every field.
     public static Limits Unlimited => new Limits
     {
         MaxStringLength = uint.MaxValue,
         MaxBytesLength = uint.MaxValue,
+        MaxArrayCount = uint.MaxValue,
     };
 }
 
@@ -138,6 +145,10 @@ public sealed class Writer
         WriteUInt32((uint)value.Length);
         _buffer.AddRange(value);
     }
+
+    /// Writes an `Array<T>`'s element count (RFC-0002 §6) - the caller
+    /// writes each element itself, in order, right after.
+    public void WriteArrayCount(int count) => WriteUInt32((uint)count);
 
     private void WriteLittleEndian(ulong value, int byteCount)
     {
@@ -248,6 +259,12 @@ public ref struct Reader
         int len = ReadLength(_limits.MaxBytesLength);
         return TakeChecked(len, start).ToArray();
     }
+
+    /// Reads an `Array<T>`'s element count (RFC-0002 §6), checked against
+    /// <see cref="Limits.MaxArrayCount"/> before the caller reads a single
+    /// element - the same allocation guard <see cref="ReadString"/> and
+    /// <see cref="ReadBytes"/> apply to their own length prefix.
+    public int ReadArrayCount() => ReadLength(_limits.MaxArrayCount);
 
     private int ReadLength(long limit)
     {

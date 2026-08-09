@@ -165,6 +165,97 @@ public sealed class GeneratedTests
         Assert.True(reader.IsEmpty);
     }
 
+    // =========================================================== §6 - Array<T>
+
+    private static Team TeamSample() => new Team
+    {
+        Scores = new() { 10, 20, 30 },
+        Names = new() { "alice", "bob" },
+        Players = new() { new PlayerInfo { Level = 3 }, new PlayerInfo { Level = 7 } },
+    };
+
+    private static readonly byte[] TeamGoldenBytes =
+    {
+        0x03, 0x00, 0x00, 0x00, // Scores.Count = 3
+        0x0A, 0x00, 0x00, 0x00, // Scores[0] = 10
+        0x14, 0x00, 0x00, 0x00, // Scores[1] = 20
+        0x1E, 0x00, 0x00, 0x00, // Scores[2] = 30
+        0x02, 0x00, 0x00, 0x00, // Names.Count = 2
+        0x05, 0x00, 0x00, 0x00, 0x61, 0x6C, 0x69, 0x63, 0x65, // Names[0] = "alice"
+        0x03, 0x00, 0x00, 0x00, 0x62, 0x6F, 0x62, // Names[1] = "bob"
+        0x02, 0x00, 0x00, 0x00, // Players.Count = 2
+        0x03, 0x00, 0x00, 0x00, // Players[0].Level = 3, inlined
+        0x07, 0x00, 0x00, 0x00, // Players[1].Level = 7, inlined
+    };
+
+    /// <summary>
+    /// h.md §6 - <c>Array&lt;T&gt;</c> is a <c>UInt32</c> count followed by that
+    /// many elements, no per-element length prefix. Same bytes as the Rust
+    /// backend's identical test (<c>tests/generated.rs</c>) and the Go and
+    /// GDScript backends.
+    /// </summary>
+    [Fact]
+    public void ArrayOfScalarStringAndModelMatchesTheGoldenBytes()
+    {
+        Assert.Equal(TeamGoldenBytes, EncodeWith(TeamSample(), TeamEdgeCodec.Encode));
+    }
+
+    [Fact]
+    public void ArrayRoundTripsIncludingNestedModelElements()
+    {
+        byte[] bytes = EncodeWith(TeamSample(), TeamEdgeCodec.Encode);
+        var decoded = new Team();
+        var reader = new Reader(bytes);
+        TeamEdgeCodec.Decode(ref reader, ref decoded);
+
+        Assert.Equal(TeamSample().Scores, decoded.Scores);
+        Assert.Equal(TeamSample().Names, decoded.Names);
+        Assert.Equal(3u, decoded.Players[0].Level);
+        Assert.Equal(7u, decoded.Players[1].Level);
+        Assert.True(reader.IsEmpty);
+    }
+
+    /// <summary>An empty <c>Array&lt;T&gt;</c> is just its <c>UInt32</c> count of zero.</summary>
+    [Fact]
+    public void AnEmptyArrayIsJustItsZeroCount()
+    {
+        byte[] bytes = EncodeWith(new Team(), TeamEdgeCodec.Encode);
+        Assert.Equal(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, bytes);
+
+        var decoded = new Team { Scores = new() { 1 } };
+        var reader = new Reader(bytes);
+        TeamEdgeCodec.Decode(ref reader, ref decoded);
+        Assert.Empty(decoded.Scores);
+    }
+
+    /// <summary>
+    /// <c>Limits.MaxArrayCount</c> is checked before an element is allocated,
+    /// the same guard <c>MaxStringLength</c>/<c>MaxBytesLength</c> already give
+    /// scalar fields.
+    /// </summary>
+    [Fact]
+    public void AnArrayCountOverTheLimitIsRejectedBeforeAllocating()
+    {
+        var writer = new Writer();
+        writer.WriteArrayCount(5);
+
+        var limits = Limits.Unlimited;
+        limits.MaxArrayCount = 2;
+        var reader = new Reader(writer.ToArray(), limits);
+
+        DecodeException thrown = null;
+        try
+        {
+            reader.ReadArrayCount();
+        }
+        catch (DecodeException exception)
+        {
+            thrown = exception;
+        }
+
+        Assert.NotNull(thrown);
+    }
+
     // ========================================================== §4 - primitives
 
     /// <summary>

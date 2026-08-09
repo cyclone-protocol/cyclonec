@@ -84,10 +84,19 @@ type Limits struct {
 	MaxStringLen int
 	// MaxBytesLen is the largest accepted byte length of a bytes blob.
 	MaxBytesLen int
+	// MaxArrayCount is the largest accepted element count of an Array<T>
+	// (RFC-0002 §6). A uint32 count can claim up to 4 GiB of elements
+	// before a single one is even read, so this guards allocation the
+	// same way MaxStringLen/MaxBytesLen do.
+	MaxArrayCount int
 }
 
 // UnlimitedLimits is the permissive default: math.MaxUint32 for every field.
-var UnlimitedLimits = Limits{MaxStringLen: math.MaxUint32, MaxBytesLen: math.MaxUint32}
+var UnlimitedLimits = Limits{
+	MaxStringLen:  math.MaxUint32,
+	MaxBytesLen:   math.MaxUint32,
+	MaxArrayCount: math.MaxUint32,
+}
 
 // Writer appends Cyclone-encoded values to a growable buffer.
 //
@@ -195,6 +204,12 @@ func (w *Writer) WriteString(value string) {
 func (w *Writer) WriteBytes(value []byte) {
 	w.WriteU32(uint32(len(value)))
 	w.buf = append(w.buf, value...)
+}
+
+// WriteArrayCount writes an Array<T>'s element count (RFC-0002 §6) - the
+// caller writes each element itself, in order, right after.
+func (w *Writer) WriteArrayCount(count int) {
+	w.WriteU32(uint32(count))
 }
 
 // Reader reads Cyclone-encoded values from a borrowed buffer.
@@ -372,6 +387,14 @@ func (r *Reader) ReadBytes() ([]byte, error) {
 	out := make([]byte, len(bytes))
 	copy(out, bytes)
 	return out, nil
+}
+
+// ReadArrayCount reads an Array<T>'s element count (RFC-0002 §6), checked
+// against Limits.MaxArrayCount before the caller reads a single element -
+// the same allocation guard ReadString and ReadBytes apply to their own
+// length prefix.
+func (r *Reader) ReadArrayCount() (int, error) {
+	return r.readLength(r.limits.MaxArrayCount)
 }
 
 func (r *Reader) readLength(limit int) (int, error) {
@@ -618,6 +641,80 @@ func (PlayerEdgeCodec) Decode(r *Reader, value *Player) error {
 	if err != nil {
 		return err
 	}
+
+	return nil
+}
+
+// TeamEdgeCodec is the "edge" codec for Team, generated from its Cyclone attributes.
+type TeamEdgeCodec struct{}
+
+// Encode writes the "edge" fields of value, in declaration order.
+func (TeamEdgeCodec) Encode(w *Writer, value *Team) {
+	w.WriteArrayCount(len(value.Scores))
+	for _, element := range value.Scores {
+		w.WriteU32(element)
+	}
+	w.WriteArrayCount(len(value.Names))
+	for _, element := range value.Names {
+		w.WriteString(element)
+	}
+	w.WriteArrayCount(len(value.Players))
+	for _, element := range value.Players {
+		(PlayerInfoEdgeCodec{}).Encode(w, &element)
+	}
+}
+
+// Decode reads the "edge" fields into value, in declaration order.
+//
+// Fields this codec does not carry are left as they were, which is what lets one
+// model be split across several codecs.
+func (TeamEdgeCodec) Decode(r *Reader, value *Team) error {
+	var err error
+
+	scoresCount, err := r.ReadArrayCount()
+	if err != nil {
+		return err
+	}
+	scoresElements := make([]uint32, 0, scoresCount)
+	for i := 0; i < scoresCount; i++ {
+		var element uint32
+		element, err = r.ReadU32()
+		if err != nil {
+			return err
+		}
+		scoresElements = append(scoresElements, element)
+	}
+	value.Scores = scoresElements
+
+	namesCount, err := r.ReadArrayCount()
+	if err != nil {
+		return err
+	}
+	namesElements := make([]string, 0, namesCount)
+	for i := 0; i < namesCount; i++ {
+		var element string
+		element, err = r.ReadString()
+		if err != nil {
+			return err
+		}
+		namesElements = append(namesElements, element)
+	}
+	value.Names = namesElements
+
+	playersCount, err := r.ReadArrayCount()
+	if err != nil {
+		return err
+	}
+	playersElements := make([]PlayerInfo, 0, playersCount)
+	for i := 0; i < playersCount; i++ {
+		var element PlayerInfo
+		err = (PlayerInfoEdgeCodec{}).Decode(r, &element)
+		if err != nil {
+			return err
+		}
+		playersElements = append(playersElements, element)
+	}
+	value.Players = playersElements
 
 	return nil
 }

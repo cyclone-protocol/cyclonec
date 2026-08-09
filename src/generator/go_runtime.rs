@@ -87,10 +87,19 @@ type Limits struct {
 	MaxStringLen int
 	// MaxBytesLen is the largest accepted byte length of a bytes blob.
 	MaxBytesLen int
+	// MaxArrayCount is the largest accepted element count of an Array<T>
+	// (RFC-0002 §6). A uint32 count can claim up to 4 GiB of elements
+	// before a single one is even read, so this guards allocation the
+	// same way MaxStringLen/MaxBytesLen do.
+	MaxArrayCount int
 }
 
 // UnlimitedLimits is the permissive default: math.MaxUint32 for every field.
-var UnlimitedLimits = Limits{MaxStringLen: math.MaxUint32, MaxBytesLen: math.MaxUint32}
+var UnlimitedLimits = Limits{
+	MaxStringLen:  math.MaxUint32,
+	MaxBytesLen:   math.MaxUint32,
+	MaxArrayCount: math.MaxUint32,
+}
 
 // Writer appends Cyclone-encoded values to a growable buffer.
 //
@@ -198,6 +207,12 @@ func (w *Writer) WriteString(value string) {
 func (w *Writer) WriteBytes(value []byte) {
 	w.WriteU32(uint32(len(value)))
 	w.buf = append(w.buf, value...)
+}
+
+// WriteArrayCount writes an Array<T>'s element count (RFC-0002 §6) - the
+// caller writes each element itself, in order, right after.
+func (w *Writer) WriteArrayCount(count int) {
+	w.WriteU32(uint32(count))
 }
 
 // Reader reads Cyclone-encoded values from a borrowed buffer.
@@ -375,6 +390,14 @@ func (r *Reader) ReadBytes() ([]byte, error) {
 	out := make([]byte, len(bytes))
 	copy(out, bytes)
 	return out, nil
+}
+
+// ReadArrayCount reads an Array<T>'s element count (RFC-0002 §6), checked
+// against Limits.MaxArrayCount before the caller reads a single element -
+// the same allocation guard ReadString and ReadBytes apply to their own
+// length prefix.
+func (r *Reader) ReadArrayCount() (int, error) {
+	return r.readLength(r.limits.MaxArrayCount)
 }
 
 func (r *Reader) readLength(limit int) (int, error) {

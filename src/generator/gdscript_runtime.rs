@@ -119,6 +119,11 @@ class DecodeError:
 class Limits:
 	var max_string_len: int = 0xFFFFFFFF
 	var max_bytes_len: int = 0xFFFFFFFF
+	# Largest accepted element count of an Array<T> (RFC-0002 §6). A u32
+	# count can claim up to 4 GiB of elements before a single one is even
+	# read, so this guards allocation the same way max_string_len/
+	# max_bytes_len do.
+	var max_array_count: int = 0xFFFFFFFF
 
 # Writer appends Cyclone-encoded values to a growable buffer.
 #
@@ -206,6 +211,11 @@ class Writer:
 	func write_bytes(value: PackedByteArray) -> void:
 		write_u32(value.size())
 		buf.append_array(value)
+
+	# Writes an Array<T>'s element count (RFC-0002 §6) - the caller writes
+	# each element itself, in order, right after.
+	func write_array_count(count: int) -> void:
+		write_u32(count)
 
 # Reader reads Cyclone-encoded values from a borrowed buffer.
 #
@@ -350,6 +360,14 @@ class Reader:
 			return [PackedByteArray(), length_result[1]]
 		var length: int = length_result[0]
 		return _take_checked(length, start)
+
+	# Reads an Array<T>'s element count (RFC-0002 §6), checked against
+	# limits.max_array_count before the caller reads a single element -
+	# the same allocation guard read_string/read_bytes apply to their own
+	# length prefix. Returns [count, error], the same two-slot convention
+	# every read here follows.
+	func read_array_count() -> Array:
+		return _read_length(limits.max_array_count)
 
 	func _read_length(limit: int) -> Array:
 		var start := pos

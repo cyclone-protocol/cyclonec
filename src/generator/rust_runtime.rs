@@ -85,6 +85,11 @@ pub struct Limits {
     pub max_string_len: usize,
     /// Largest accepted byte length of a `bytes` blob.
     pub max_bytes_len: usize,
+    /// Largest accepted element count of an `Array<T>` (RFC-0002 §6). A
+    /// `u32` count can claim up to 4 GiB of elements before a single one is
+    /// even read, so this guards allocation the same way the string/bytes
+    /// limits do.
+    pub max_array_count: usize,
 }
 
 #[allow(dead_code)]
@@ -93,6 +98,7 @@ impl Limits {
     pub const UNLIMITED: Limits = Limits {
         max_string_len: u32::MAX as usize,
         max_bytes_len: u32::MAX as usize,
+        max_array_count: u32::MAX as usize,
     };
 }
 
@@ -228,6 +234,17 @@ impl Writer {
     pub fn write_bytes(&mut self, value: &[u8]) {
         self.write_len(value.len());
         self.buf.extend_from_slice(value);
+    }
+
+    /// Writes an `Array<T>`'s element count (RFC-0002 §6) - the caller
+    /// writes each element itself, in order, right after.
+    ///
+    /// # Panics
+    ///
+    /// If `count` is longer than `u32::MAX`, which the wire format cannot
+    /// represent.
+    pub fn write_array_count(&mut self, count: usize) {
+        self.write_len(count);
     }
 
     fn write_len(&mut self, len: usize) {
@@ -401,6 +418,14 @@ impl<'a> Reader<'a> {
                 ::core::result::Result::Err(error)
             }
         }
+    }
+
+    /// Reads an `Array<T>`'s element count (RFC-0002 §6), checked against
+    /// [`Limits::max_array_count`] before the caller reads a single
+    /// element - the same allocation guard [`Reader::read_string`] and
+    /// [`Reader::read_bytes`] apply to their own length prefix.
+    pub fn read_array_count(&mut self) -> ::core::result::Result<usize, DecodeError> {
+        self.read_len(self.limits.max_array_count)
     }
 
     /// Reads a `u32` length prefix and checks it against `limit`.

@@ -9,6 +9,7 @@ class_name CycloneCodec
 #     no_fields_joined.gd
 #     player.gd
 #     player_info.gd
+#     team.gd
 #     telemetry.gd
 #
 # This file is self-contained: it carries the Cyclone runtime (Writer,
@@ -61,6 +62,11 @@ class DecodeError:
 class Limits:
 	var max_string_len: int = 0xFFFFFFFF
 	var max_bytes_len: int = 0xFFFFFFFF
+	# Largest accepted element count of an Array<T> (RFC-0002 §6). A u32
+	# count can claim up to 4 GiB of elements before a single one is even
+	# read, so this guards allocation the same way max_string_len/
+	# max_bytes_len do.
+	var max_array_count: int = 0xFFFFFFFF
 
 # Writer appends Cyclone-encoded values to a growable buffer.
 #
@@ -148,6 +154,11 @@ class Writer:
 	func write_bytes(value: PackedByteArray) -> void:
 		write_u32(value.size())
 		buf.append_array(value)
+
+	# Writes an Array<T>'s element count (RFC-0002 §6) - the caller writes
+	# each element itself, in order, right after.
+	func write_array_count(count: int) -> void:
+		write_u32(count)
 
 # Reader reads Cyclone-encoded values from a borrowed buffer.
 #
@@ -292,6 +303,14 @@ class Reader:
 			return [PackedByteArray(), length_result[1]]
 		var length: int = length_result[0]
 		return _take_checked(length, start)
+
+	# Reads an Array<T>'s element count (RFC-0002 §6), checked against
+	# limits.max_array_count before the caller reads a single element -
+	# the same allocation guard read_string/read_bytes apply to their own
+	# length prefix. Returns [count, error], the same two-slot convention
+	# every read here follows.
+	func read_array_count() -> Array:
+		return _read_length(limits.max_array_count)
 
 	func _read_length(limit: int) -> Array:
 		var start := pos
@@ -507,6 +526,57 @@ class PlayerInfoEdgeCodec:
 		if level_result[1] != null:
 			return level_result[1]
 		value.level = level_result[0]
+		return null
+
+# TeamEdgeCodec is the "edge" codec for Team, generated from its Cyclone attributes.
+class TeamEdgeCodec:
+	# Writes the "edge" fields of value, in declaration order.
+	func encode(writer: Writer, value: Team) -> void:
+		writer.write_array_count(value.scores.size())
+		for element in value.scores:
+			writer.write_u32(element)
+		writer.write_array_count(value.names.size())
+		for element in value.names:
+			writer.write_string(element)
+		writer.write_array_count(value.players.size())
+		for element in value.players:
+			PlayerInfoEdgeCodec.new().encode(writer, element)
+
+	# Reads the "edge" fields into value, in declaration order.
+	# Fields this codec does not carry are left as they were, which is what lets one
+	# model be split across several codecs.
+	func decode(reader: Reader, value: Team) -> DecodeError:
+		var scores_count_result := reader.read_array_count()
+		if scores_count_result[1] != null:
+			return scores_count_result[1]
+		var scores_elements := []
+		for i in range(scores_count_result[0]):
+			var element_result = reader.read_u32()
+			if element_result[1] != null:
+				return element_result[1]
+			scores_elements.append(element_result[0])
+		value.scores = scores_elements
+		var names_count_result := reader.read_array_count()
+		if names_count_result[1] != null:
+			return names_count_result[1]
+		var names_elements := []
+		for i in range(names_count_result[0]):
+			var element_result = reader.read_string()
+			if element_result[1] != null:
+				return element_result[1]
+			names_elements.append(element_result[0])
+		value.names = names_elements
+		var players_count_result := reader.read_array_count()
+		if players_count_result[1] != null:
+			return players_count_result[1]
+		var players_elements := []
+		for i in range(players_count_result[0]):
+			var element = PlayerInfo.new()
+			var element_error = PlayerInfoEdgeCodec.new().decode(reader, element)
+			if element_error != null:
+				return element_error
+			players_elements.append(element)
+		value.players = players_elements
 		return null
 
 # TelemetryEdgeCodec is the "edge" codec for Telemetry, generated from its Cyclone attributes.

@@ -191,6 +191,110 @@ func TestAModelFieldIsInlined(t *testing.T) {
 	}
 }
 
+// ============================================================== §6 - Array<T>
+
+// teamSample and teamGoldenBytes are the exact same schema and bytes asserted
+// in tests/generated.rs (Rust) and tests/csharp/GeneratedTests.cs (C#), and
+// confirmed by a real Godot run over tests/fixtures/gdscript/team.gd.
+func teamSample() *Team {
+	return &Team{
+		Scores:  []uint32{10, 20, 30},
+		Names:   []string{"alice", "bob"},
+		Players: []PlayerInfo{{Level: 3}, {Level: 7}},
+	}
+}
+
+func teamGoldenBytes() []byte {
+	return []byte{
+		0x03, 0x00, 0x00, 0x00, // Scores count = 3
+		0x0A, 0x00, 0x00, 0x00, // Scores[0] = 10
+		0x14, 0x00, 0x00, 0x00, // Scores[1] = 20
+		0x1E, 0x00, 0x00, 0x00, // Scores[2] = 30
+		0x02, 0x00, 0x00, 0x00, // Names count = 2
+		0x05, 0x00, 0x00, 0x00, 'a', 'l', 'i', 'c', 'e', // Names[0]
+		0x03, 0x00, 0x00, 0x00, 'b', 'o', 'b', // Names[1]
+		0x02, 0x00, 0x00, 0x00, // Players count = 2
+		0x03, 0x00, 0x00, 0x00, // Players[0].Level = 3, inlined
+		0x07, 0x00, 0x00, 0x00, // Players[1].Level = 7, inlined
+	}
+}
+
+// h.md §6 - Array<T> is a UInt32 count followed by that many elements, no
+// per-element length prefix. Same bytes as the Rust and C# backends' identical
+// tests.
+func TestArrayOfScalarStringAndModelMatchesTheGoldenBytes(t *testing.T) {
+	edge := TeamEdgeCodec{}
+	w := NewWriter()
+	edge.Encode(w, teamSample())
+
+	if got, want := w.Bytes(), teamGoldenBytes(); !bytes.Equal(got, want) {
+		t.Fatalf("encode = % X, want % X", got, want)
+	}
+}
+
+func TestArrayRoundTripsIncludingNestedModelElements(t *testing.T) {
+	edge := TeamEdgeCodec{}
+	encoded := teamGoldenBytes()
+
+	decoded := &Team{}
+	r := NewReader(encoded)
+	if err := edge.Decode(r, decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !r.IsEmpty() {
+		t.Errorf("cursor did not land exactly at the end")
+	}
+	if !bytes.Equal(uint32sToBytes(decoded.Scores), uint32sToBytes(teamSample().Scores)) {
+		t.Errorf("Scores = %v", decoded.Scores)
+	}
+	if len(decoded.Players) != 2 || decoded.Players[0].Level != 3 || decoded.Players[1].Level != 7 {
+		t.Errorf("Players = %+v", decoded.Players)
+	}
+}
+
+func uint32sToBytes(values []uint32) []byte {
+	out := make([]byte, 0, len(values)*4)
+	for _, v := range values {
+		out = append(out, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+	}
+	return out
+}
+
+// An empty Array<T> is just its UInt32 count of zero.
+func TestAnEmptyArrayIsJustItsZeroCount(t *testing.T) {
+	edge := TeamEdgeCodec{}
+	w := NewWriter()
+	edge.Encode(w, &Team{})
+
+	want := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	if got := w.Bytes(); !bytes.Equal(got, want) {
+		t.Fatalf("encode = % X, want % X", got, want)
+	}
+
+	decoded := &Team{Scores: []uint32{1}}
+	if err := edge.Decode(NewReader(w.Bytes()), decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(decoded.Scores) != 0 {
+		t.Errorf("Scores = %v, want empty", decoded.Scores)
+	}
+}
+
+// Limits.MaxArrayCount is checked before an element is allocated, the same
+// guard MaxStringLength/MaxBytesLength already give scalar fields.
+func TestAnArrayCountOverTheLimitIsRejectedBeforeAllocating(t *testing.T) {
+	w := NewWriter()
+	w.WriteArrayCount(5)
+
+	limits := UnlimitedLimits
+	limits.MaxArrayCount = 2
+	r := NewReaderWithLimits(w.Bytes(), limits)
+
+	if _, err := r.ReadArrayCount(); err == nil {
+		t.Fatal("expected an error for an array count over the limit")
+	}
+}
+
 // ============================================================ §4 - primitives
 
 // h.md §4 - each network type maps to the runtime method RFC-0002 defines,

@@ -56,11 +56,18 @@ public struct Limits
     /// Largest accepted byte length of a `bytes` blob.
     public long MaxBytesLength;
 
+    /// Largest accepted element count of an `Array<T>` (RFC-0002 §6). A
+    /// `u32` count can claim up to 4 GiB of elements before a single one is
+    /// even read, so this guards allocation the same way the string/bytes
+    /// limits do.
+    public long MaxArrayCount;
+
     /// The permissive default: `uint.MaxValue` for every field.
     public static Limits Unlimited => new Limits
     {
         MaxStringLength = uint.MaxValue,
         MaxBytesLength = uint.MaxValue,
+        MaxArrayCount = uint.MaxValue,
     };
 }
 
@@ -133,6 +140,10 @@ public sealed class Writer
         WriteUInt32((uint)value.Length);
         _buffer.AddRange(value);
     }
+
+    /// Writes an `Array<T>`'s element count (RFC-0002 §6) - the caller
+    /// writes each element itself, in order, right after.
+    public void WriteArrayCount(int count) => WriteUInt32((uint)count);
 
     private void WriteLittleEndian(ulong value, int byteCount)
     {
@@ -243,6 +254,12 @@ public ref struct Reader
         int len = ReadLength(_limits.MaxBytesLength);
         return TakeChecked(len, start).ToArray();
     }
+
+    /// Reads an `Array<T>`'s element count (RFC-0002 §6), checked against
+    /// <see cref="Limits.MaxArrayCount"/> before the caller reads a single
+    /// element - the same allocation guard <see cref="ReadString"/> and
+    /// <see cref="ReadBytes"/> apply to their own length prefix.
+    public int ReadArrayCount() => ReadLength(_limits.MaxArrayCount);
 
     private int ReadLength(long limit)
     {
@@ -450,6 +467,60 @@ public static class PlayerEdgeCodec
         var infoValue = value.Info;
         PlayerInfoEdgeCodec.Decode(ref reader, ref infoValue);
         value.Info = infoValue;
+    }
+}
+
+/// <summary>The <c>edge</c> codec for <see cref="Team"/>, generated from its Cyclone attributes.</summary>
+public static class TeamEdgeCodec
+{
+    /// <summary>Writes the <c>edge</c> fields of <paramref name="value"/>, in declaration order.</summary>
+    public static void Encode(Writer writer, Team value)
+    {
+        writer.WriteArrayCount(value.Scores.Count);
+        foreach (var element in value.Scores)
+        {
+            writer.WriteUInt32(element);
+        }
+        writer.WriteArrayCount(value.Names.Count);
+        foreach (var element in value.Names)
+        {
+            writer.WriteString(element);
+        }
+        writer.WriteArrayCount(value.Players.Count);
+        foreach (var element in value.Players)
+        {
+            PlayerInfoEdgeCodec.Encode(writer, element);
+        }
+    }
+
+    /// <summary>Reads the <c>edge</c> fields into <paramref name="value"/>, in declaration order.</summary>
+    /// <remarks>Fields this codec does not carry are left as they were, which is
+    /// what lets one model be split across several codecs.</remarks>
+    public static void Decode(ref Reader reader, ref Team value)
+    {
+        int scoresValueCount = reader.ReadArrayCount();
+        var scoresValueList = new System.Collections.Generic.List<uint>(scoresValueCount);
+        for (int i = 0; i < scoresValueCount; i++)
+        {
+            scoresValueList.Add(reader.ReadUInt32());
+        }
+        value.Scores = scoresValueList;
+        int namesValueCount = reader.ReadArrayCount();
+        var namesValueList = new System.Collections.Generic.List<string>(namesValueCount);
+        for (int i = 0; i < namesValueCount; i++)
+        {
+            namesValueList.Add(reader.ReadString());
+        }
+        value.Names = namesValueList;
+        int playersValueCount = reader.ReadArrayCount();
+        var playersValueList = new System.Collections.Generic.List<PlayerInfo>(playersValueCount);
+        for (int i = 0; i < playersValueCount; i++)
+        {
+            var element = new PlayerInfo();
+            PlayerInfoEdgeCodec.Decode(ref reader, ref element);
+            playersValueList.Add(element);
+        }
+        value.Players = playersValueList;
     }
 }
 

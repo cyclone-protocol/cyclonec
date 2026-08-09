@@ -1557,6 +1557,43 @@ fn rust_nested_codec_mismatch_is_a_reported_error() {
     assert!(message.contains("edge, unity"), "{message}");
 }
 
+/// The same dangling-reference audit as `rust_nested_codec_mismatch_is_a_reported_error`,
+/// but for `Array<PlayerInfo>` - the element type must be checked, not just a
+/// bare model-typed field.
+#[test]
+fn rust_array_of_nested_model_codec_mismatch_is_a_reported_error() {
+    let (output, generated) = generate(
+        "rust_array_nested_mismatch",
+        r#"
+        #[network]
+        #[codec(edge, unity)]
+        struct PlayerInfo {
+            #[network(u32)]
+            #[codec(edge, unity)]
+            level: u32,
+        }
+
+        #[network]
+        #[codec(edge, orange_pi)]
+        struct Team {
+            #[network(Array<PlayerInfo>)]
+            #[codec(edge, orange_pi)]
+            players: Vec<PlayerInfo>,
+        }
+        "#,
+    );
+
+    assert!(!output.status.success());
+    assert!(generated.is_none(), "nothing is written when validation fails");
+
+    let message = stderr(&output);
+    assert!(message.contains("'Team'"), "{message}");
+    assert!(message.contains("'players'"), "{message}");
+    assert!(message.contains("'orange_pi'"), "{message}");
+    assert!(message.contains("'PlayerInfo'"), "{message}");
+    assert!(message.contains("edge, unity"), "{message}");
+}
+
 #[test]
 fn csharp_nested_codec_mismatch_is_a_reported_error() {
     let (output, generated) = generate_csharp(
@@ -1959,6 +1996,57 @@ fn gdscript_nested_model_with_multiple_codecs_calls_the_matching_nested_codec() 
     let unity = extract_gdscript_method(&generated, "PlayerUnityCodec", "encode");
     assert!(unity.contains("PlayerInfoUnityCodec.new().encode"), "{unity}");
     assert!(!unity.contains("PlayerInfoEdgeCodec"), "{unity}");
+}
+
+/// `Array<T>` over a scalar, a string, and a nested model: each element type
+/// gets the write/read call its own network type would get, wrapped in a
+/// count-prefixed loop - the GDScript counterpart of the byte-identical
+/// golden vector already asserted for Rust, C#, and Go, and confirmed here by
+/// a real Godot run over `tests/fixtures/gdscript/team.gd`.
+#[test]
+fn gdscript_array_of_scalar_string_and_model() {
+    let directory = scratch("gd_array");
+    std::fs::write(
+        directory.join("player_info.gd"),
+        "# cyclone:model codec=edge\n\
+         class_name PlayerInfo\n\n\
+         # cyclone:u32 codec=edge\n\
+         var level: int\n",
+    )
+    .expect("write source");
+    std::fs::write(
+        directory.join("team.gd"),
+        "# cyclone:model codec=edge\n\
+         class_name Team\n\n\
+         # cyclone:Array<u32> codec=edge\n\
+         var scores: Array[int] = []\n\n\
+         # cyclone:Array<string> codec=edge\n\
+         var names: Array[String] = []\n\n\
+         # cyclone:Array<PlayerInfo> codec=edge\n\
+         var players: Array[PlayerInfo] = []\n",
+    )
+    .expect("write source");
+
+    let path = directory.to_str().expect("utf-8 path");
+    let output = cyclonec(&["--out", path, path]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let generated =
+        std::fs::read_to_string(directory.join("cyclone.codec.gd")).expect("read gdscript");
+
+    let encode = extract_gdscript_method(&generated, "TeamEdgeCodec", "encode");
+    assert!(encode.contains("writer.write_array_count(value.scores.size())"), "{encode}");
+    assert!(encode.contains("writer.write_u32(element)"), "{encode}");
+    assert!(encode.contains("writer.write_array_count(value.names.size())"), "{encode}");
+    assert!(encode.contains("writer.write_string(element)"), "{encode}");
+    assert!(encode.contains("writer.write_array_count(value.players.size())"), "{encode}");
+    assert!(encode.contains("PlayerInfoEdgeCodec.new().encode"), "{encode}");
+
+    let decode = extract_gdscript_method(&generated, "TeamEdgeCodec", "decode");
+    assert!(decode.contains("read_array_count"), "{decode}");
+    assert!(decode.contains("read_u32"), "{decode}");
+    assert!(decode.contains("read_string"), "{decode}");
+    assert!(decode.contains("PlayerInfoEdgeCodec.new().decode"), "{decode}");
 }
 
 /// A field routing a nested model into a codec the nested model itself never

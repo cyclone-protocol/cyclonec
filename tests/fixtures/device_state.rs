@@ -44,7 +44,7 @@ pub struct Telemetry {
 /// h.md §8 - a field whose network type is another model.
 #[network]
 #[codec(edge)]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct PlayerInfo {
     #[network(u32)]
     #[codec(edge)]
@@ -66,6 +66,24 @@ pub struct Player {
     #[network(PlayerInfo)]
     #[codec(edge)]
     pub info: PlayerInfo,
+}
+
+/// Array<T> - scalars, strings, and a nested model, each as an element type.
+#[network]
+#[codec(edge)]
+#[derive(Debug, Default, PartialEq)]
+pub struct Team {
+    #[network(Array<u32>)]
+    #[codec(edge)]
+    pub scores: Vec<u32>,
+
+    #[network(Array<string>)]
+    #[codec(edge)]
+    pub names: Vec<String>,
+
+    #[network(Array<PlayerInfo>)]
+    #[codec(edge)]
+    pub players: Vec<PlayerInfo>,
 }
 
 /// Every primitive RFC-0002 defines, once.

@@ -37,6 +37,15 @@ type Player struct {
 	Info  PlayerInfo `cyclone:"PlayerInfo" codec:"edge"`
 }
 
+// Array<T> - scalars, strings, and a nested model.
+//
+//cyclone:model codec=edge
+type Team struct {
+	Scores  []uint32     `cyclone:"Array<u32>" codec:"edge"`
+	Names   []string     `cyclone:"Array<string>" codec:"edge"`
+	Players []PlayerInfo `cyclone:"Array<PlayerInfo>" codec:"edge"`
+}
+
 // Every primitive RFC-0002 defines, once.
 //
 //cyclone:model codec=all

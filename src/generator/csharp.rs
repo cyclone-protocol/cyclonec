@@ -28,29 +28,33 @@
 //! provided the field already holds an instance, the same requirement Rust's
 //! version has (there, the language enforces it; here, the caller must).
 
-use crate::model::{pascal_case, Field, Model};
+use crate::model::{array_element_type, pascal_case, Field, Model};
 
-/// The runtime method each network type maps to.
+/// The runtime method each network type maps to, and the C# type it reads
+/// or writes - the fourth column matters only for `Array<T>` (see
+/// [`decode_field`]), which needs `T`'s C# spelling to declare the
+/// `List<T>` it builds; a bare field never needs it, since `value.{name}`
+/// already has whatever type the field was declared with.
 ///
 /// Every name in this table comes from RFC-0002's Reader / Writer interface,
 /// spelled the way [`super::csharp_runtime`] spells it. A name that is not in
 /// it is not looked up, resolved, or imported - it is another model, and the
 /// call is spelled and left for the C# compiler to resolve or reject.
-const PRIMITIVES: &[(&str, &str, &str)] = &[
-    // (network type, writer method, reader method)
-    ("bool", "WriteBool", "ReadBool"),
-    ("i8", "WriteInt8", "ReadInt8"),
-    ("u8", "WriteUInt8", "ReadUInt8"),
-    ("i16", "WriteInt16", "ReadInt16"),
-    ("u16", "WriteUInt16", "ReadUInt16"),
-    ("i32", "WriteInt32", "ReadInt32"),
-    ("u32", "WriteUInt32", "ReadUInt32"),
-    ("i64", "WriteInt64", "ReadInt64"),
-    ("u64", "WriteUInt64", "ReadUInt64"),
-    ("f32", "WriteFloat32", "ReadFloat32"),
-    ("f64", "WriteFloat64", "ReadFloat64"),
-    ("string", "WriteString", "ReadString"),
-    ("bytes", "WriteBytes", "ReadBytes"),
+const PRIMITIVES: &[(&str, &str, &str, &str)] = &[
+    // (network type, writer method, reader method, C# type)
+    ("bool", "WriteBool", "ReadBool", "bool"),
+    ("i8", "WriteInt8", "ReadInt8", "sbyte"),
+    ("u8", "WriteUInt8", "ReadUInt8", "byte"),
+    ("i16", "WriteInt16", "ReadInt16", "short"),
+    ("u16", "WriteUInt16", "ReadUInt16", "ushort"),
+    ("i32", "WriteInt32", "ReadInt32", "int"),
+    ("u32", "WriteUInt32", "ReadUInt32", "uint"),
+    ("i64", "WriteInt64", "ReadInt64", "long"),
+    ("u64", "WriteUInt64", "ReadUInt64", "ulong"),
+    ("f32", "WriteFloat32", "ReadFloat32", "float"),
+    ("f64", "WriteFloat64", "ReadFloat64", "double"),
+    ("string", "WriteString", "ReadString", "string"),
+    ("bytes", "WriteBytes", "ReadBytes", "byte[]"),
 ];
 
 /// The name of the generated file when the output path names a directory.
@@ -149,7 +153,10 @@ fn codec_type(out: &mut String, model: &Model, codec: &str) {
     out.push_str("}\n");
 }
 
-/// Emits one encode statement.
+/// Emits one encode statement - or, for `Array<T>`, a small block: the
+/// element count, then a `foreach` writing each one. `T` may be a primitive
+/// or another model; either way the array's own codec never comes up,
+/// because there is no such thing - only `T`'s.
 ///
 /// Unlike Rust, nothing here is written by reference: `string` and `byte[]` are
 /// already reference types in C#, so `writer.WriteString(value.Name)` needs no
@@ -157,8 +164,18 @@ fn codec_type(out: &mut String, model: &Model, codec: &str) {
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let name = &field.name;
 
+    if let Some(element_type) = array_element_type(&field.network_type) {
+        out.push_str(&format!("writer.WriteArrayCount(value.{name}.Count);\n"));
+        out.push_str(&format!(
+            "        foreach (var element in value.{name})\n        {{\n            "
+        ));
+        encode_value(out, element_type, "element", codec);
+        out.push_str("\n        }");
+        return;
+    }
+
     match primitive(&field.network_type) {
-        Some((writer_method, _)) => {
+        Some((writer_method, ..)) => {
             out.push_str(&format!("writer.{writer_method}(value.{name});"));
         }
         // A model. The codec carries over, so a nested model is written by the
@@ -170,16 +187,71 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
     }
 }
 
-/// Emits the statement(s) that decode one field, ending in a newline.
-///
-/// A primitive is one assignment. A nested model needs the `ref`-through-a-local
+/// Writes one array element, already bound to `expr` (the `foreach` loop's
+/// own `element`) - the same primitive-or-nested-model split
+/// [`encode_field`] does for a bare field, applied to an element instead of
+/// `value.{name}`.
+fn encode_value(out: &mut String, element_type: &str, expr: &str, codec: &str) {
+    match primitive(element_type) {
+        Some((writer_method, ..)) => {
+            out.push_str(&format!("writer.{writer_method}({expr});"));
+        }
+        None => {
+            let nested = codec_name(element_type, codec);
+            out.push_str(&format!("{nested}.Encode(writer, {expr});"));
+        }
+    }
+}
+
+/// Emits the statement(s) that decode one field, ending in a newline. A
+/// primitive is one assignment. A nested model needs the `ref`-through-a-local
 /// dance the module header explains: a C# property is not an addressable
 /// storage location, so it cannot be passed `ref` directly.
+///
+/// `Array<T>` reads its element count first - checked against
+/// [`Limits.MaxArrayCount`] before a single element is read - then fills a
+/// fresh `List<T>` in a loop, `T` decoded the same `ref`-through-a-local way
+/// a bare nested field is when `T` is a model.
 fn decode_field(out: &mut String, field: &Field, codec: &str) {
     let name = &field.name;
 
+    if let Some(element_type) = array_element_type(&field.network_type) {
+        let count_local = format!("{}Count", local_name(name));
+        let list_local = format!("{}List", local_name(name));
+        let element_type_csharp = csharp_type_name(element_type);
+
+        out.push_str(&format!("int {count_local} = reader.ReadArrayCount();\n"));
+        out.push_str(&format!(
+            "        var {list_local} = new System.Collections.Generic.List<{element_type_csharp}>({count_local});\n"
+        ));
+        out.push_str(&format!(
+            "        for (int i = 0; i < {count_local}; i++)\n        {{\n"
+        ));
+
+        match primitive(element_type) {
+            Some((_, reader_method, _)) => {
+                out.push_str(&format!("            {list_local}.Add(reader.{reader_method}());\n"));
+            }
+            // A model. No lambda dares capture `ref reader` - Reader is a
+            // `ref struct`, and C# forbids capturing one (or a `ref`
+            // parameter) in any closure - so this is the loop-body
+            // statements, spelled out, the same `ref`-through-a-local dance
+            // a bare nested field gets, not an expression handed to `Add`.
+            None => {
+                let nested = codec_name(element_type, codec);
+                out.push_str(&format!("            var element = new {element_type}();\n"));
+                out.push_str(&format!("            {nested}.Decode(ref reader, ref element);\n"));
+                out.push_str(&format!("            {list_local}.Add(element);\n"));
+            }
+        }
+
+        out.push_str("        }\n");
+        out.push_str(&format!("        value.{name} = {list_local};\n"));
+        return;
+    }
+
     match primitive(&field.network_type) {
-        Some((_, reader_method)) => {
+        Some((_, reader_method, _)) => {
             out.push_str(&format!("value.{name} = reader.{reader_method}();\n"));
         }
         None => {
@@ -192,17 +264,25 @@ fn decode_field(out: &mut String, field: &Field, codec: &str) {
     }
 }
 
+/// `T`'s C# type name for `Array<T>`'s `List<T>` local - the primitive
+/// table's own spelling, or (for a nested model) the model's own name,
+/// unchanged: `cyclonec` never invents a type name, only ever spells one
+/// back that either this table or the source already named.
+fn csharp_type_name(element_type: &str) -> &str {
+    primitive(element_type).map_or(element_type, |(_, _, csharp_type)| csharp_type)
+}
+
 /// The generated type name: `DeviceState` + `edge` → `DeviceStateEdgeCodec`.
 fn codec_name(model: &str, codec: &str) -> String {
     format!("{model}{}Codec", pascal_case(codec))
 }
 
 /// Looks a network type up in [`PRIMITIVES`].
-fn primitive(network_type: &str) -> Option<(&'static str, &'static str)> {
+fn primitive(network_type: &str) -> Option<(&'static str, &'static str, &'static str)> {
     PRIMITIVES
         .iter()
         .find(|(name, ..)| *name == network_type)
-        .map(|(_, writer, reader)| (*writer, *reader))
+        .map(|(_, writer, reader, csharp_type)| (*writer, *reader, *csharp_type))
 }
 
 /// A local variable name that cannot collide with `writer`, `reader`, `value`,

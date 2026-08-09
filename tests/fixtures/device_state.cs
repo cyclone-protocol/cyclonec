@@ -66,6 +66,24 @@ public class Player
     public PlayerInfo Info { get; set; } = new PlayerInfo();
 }
 
+/// <summary>Array&lt;T&gt; - scalars, strings, and a nested model.</summary>
+[Network]
+[Codec("edge")]
+public class Team
+{
+    [Network("Array<u32>")]
+    [Codec("edge")]
+    public System.Collections.Generic.List<uint> Scores { get; set; } = new();
+
+    [Network("Array<string>")]
+    [Codec("edge")]
+    public System.Collections.Generic.List<string> Names { get; set; } = new();
+
+    [Network("Array<PlayerInfo>")]
+    [Codec("edge")]
+    public System.Collections.Generic.List<PlayerInfo> Players { get; set; } = new();
+}
+
 /// <summary>Every primitive RFC-0002 defines, once.</summary>
 [Network]
 [Codec("all")]

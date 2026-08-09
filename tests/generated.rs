@@ -149,6 +149,81 @@ fn a_model_field_is_inlined() {
     assert!(reader.is_empty());
 }
 
+// ========================================================== §6 - Array<T>
+
+/// §6 - `Array<T>` is a `UInt32` count followed by that many elements, no
+/// per-element length prefix. Covers a scalar, a string, and a nested model as
+/// element types in one codec. This exact byte sequence is also asserted, from
+/// their own generated code, in `tests/csharp/GeneratedTests.cs`,
+/// `tests/fixtures/cyclone_generated_test.go`, and by a real Godot run over
+/// `tests/fixtures/gdscript/team.gd` - four languages, one wire format.
+fn team_golden_bytes() -> [u8; 48] {
+    [
+        0x03, 0x00, 0x00, 0x00, // scores.len() = 3
+        0x0A, 0x00, 0x00, 0x00, // scores[0] = 10
+        0x14, 0x00, 0x00, 0x00, // scores[1] = 20
+        0x1E, 0x00, 0x00, 0x00, // scores[2] = 30
+        0x02, 0x00, 0x00, 0x00, // names.len() = 2
+        0x05, 0x00, 0x00, 0x00, b'a', b'l', b'i', b'c', b'e', // names[0]
+        0x03, 0x00, 0x00, 0x00, b'b', b'o', b'b', // names[1]
+        0x02, 0x00, 0x00, 0x00, // players.len() = 2
+        0x03, 0x00, 0x00, 0x00, // players[0].level = 3, inlined
+        0x07, 0x00, 0x00, 0x00, // players[1].level = 7, inlined
+    ]
+}
+
+fn team_sample() -> Team {
+    Team {
+        scores: vec![10, 20, 30],
+        names: vec!["alice".to_owned(), "bob".to_owned()],
+        players: vec![PlayerInfo { level: 3 }, PlayerInfo { level: 7 }],
+    }
+}
+
+#[test]
+fn array_of_scalar_string_and_model_matches_the_golden_bytes() {
+    assert_eq!(encode(&team_sample(), TeamEdgeCodec::encode), team_golden_bytes());
+}
+
+#[test]
+fn array_round_trips_including_nested_model_elements() {
+    let bytes = encode(&team_sample(), TeamEdgeCodec::encode);
+    let mut value = Team::default();
+    let mut reader = Reader::new(&bytes);
+
+    TeamEdgeCodec::decode(&mut reader, &mut value).expect("decode");
+
+    assert_eq!(value, team_sample());
+    assert!(reader.is_empty(), "the cursor lands exactly at the end");
+}
+
+/// An empty `Array<T>` is just its `UInt32` count of zero - no elements, and
+/// decoding it leaves the field an empty `Vec`, not untouched.
+#[test]
+fn an_empty_array_is_just_its_zero_count() {
+    let bytes = encode(&Team::default(), TeamEdgeCodec::encode);
+    assert_eq!(bytes, [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+
+    let mut value = Team { scores: vec![1], ..Team::default() };
+    TeamEdgeCodec::decode(&mut Reader::new(&bytes), &mut value).expect("decode");
+    assert!(value.scores.is_empty());
+}
+
+/// `Limits::max_array_count` is checked before an element is allocated, the
+/// same guard `max_string_length` and `max_bytes_length` already give scalar
+/// fields - a forged huge count cannot force an unbounded allocation.
+#[test]
+fn an_array_count_over_the_limit_is_rejected_before_allocating() {
+    let mut writer = Writer::new();
+    writer.write_array_count(5);
+
+    let limits = Limits { max_array_count: 2, ..Limits::UNLIMITED };
+    let bytes = writer.into_bytes();
+    let mut reader = Reader::with_limits(bytes.as_slice(), limits);
+
+    assert!(reader.read_array_count().is_err());
+}
+
 // ============================================================ §4 - primitives
 
 /// h.md §4 - each network type maps to the runtime method RFC-0002 defines, and
