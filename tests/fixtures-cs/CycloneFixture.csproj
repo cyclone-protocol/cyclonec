@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The fixture project, laid out the way a real .NET project is: the SDK
+    picks up every `.cs` file under this directory by default (both
+    src/models/, the source a user writes, and src/generated/, the tree
+    `cyclonec` writes from it) - there is nothing to add to this file when a
+    model or a codec is added or removed.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "generator": "cyclonec 0.2.0",
+  "schema_fingerprint": "sha256:5407d680d673ae1ed10fc203be18c52a4bb68fe316b47f112367dae9e8421ed4",
+  "sha256_of": "each file with its `// generated-at:` line emptied, so an unchanged schema keeps an unchanged digest",
+  "sources": {
+    "src/models/player.hpp": {
+      "models": [
+        "Player",
+        "PlayerInfo",
+        "Team"
+      ],
+      "outputs": [
+        {
+          "path": "src/generated/player_edge.hpp",
+          "model": "Player",
+          "codec": "edge",
+          "fingerprint": "sha256:ee4b267575548a077d0875042492f444282502779bd198cfcc6ee8851545f1a4",
+          "sha256": "ae8a1ce522d25be9940b21a3c1b4a9b3fc9c986c22e69c3ab299d8fcadab8189"
+        },
+        {
+          "path": "src/generated/player_unity.hpp",
+          "model": "Player",
+          "codec": "unity",
+          "fingerprint": "sha256:293b91b31f6c09852736a76cbabb96a01b4d9ec58036081d26ebed7818d83254",
+          "sha256": "8d2e4061f6760a9ac8476cae256b8761c57ffab417a355147c98f12966b0f7f0"
+        },
+        {
+          "path": "src/generated/player_info_edge.hpp",
+          "model": "PlayerInfo",
+          "codec": "edge",
+          "fingerprint": "sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168",
+          "sha256": "6dd3cb37c1820e56f02854c485523e707531b5cb546df6df783212a7505cf49c"
+        },
+        {
+          "path": "src/generated/team_edge.hpp",
+          "model": "Team",
+          "codec": "edge",
+          "fingerprint": "sha256:3b370e0d3205fcdcdef5062d4485c6441ef42bf901818945a374ef31ddd0f0a1",
+          "sha256": "8bdf8a25cbd213e7aee50e7c55997ee1c16d5e1e63cc93417dfdd5d4bb734539"
+        }
+      ]
+    }
+  },
+  "shared": [
+    {
+      "path": "src/generated/runtime.hpp",
+      "kind": "runtime",
+      "sha256": "8215069822b90a21792697b342932e775dcf2d3d4a4ca0c21f928f57ccec8c14"
+    },
+    {
+      "path": "src/generated/handshake.hpp",
+      "kind": "handshake",
+      "sha256": "07eba99070e627ce5130479909f93a77c97a4c3ebe06ecfea66805dbad9bf372"
+    }
+  ]
+}

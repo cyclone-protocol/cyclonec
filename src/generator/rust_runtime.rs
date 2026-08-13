@@ -1,46 +1,52 @@
-//! The Cyclone runtime, carried verbatim into every generated file.
-//!
-//! h.md §11 gives the generated source two choices - *contain* the
-//! implementations prepared for the target, or *reference* them - and this is
-//! the first. §22 says the same thing from the other side: `Reader`, `Writer`,
-//! `DecodeError` and `Limits` are listed as part of Generated Source.
-//!
-//! So a generated file needs no crate, no import and no `Cargo.toml` entry. It
-//! is included and it works, the way a `protoc` output does.
+//! The Cyclone runtime, carried verbatim into `runtime.rs`.
 //!
 //! # Why this is a constant
 //!
-//! §10 forbids the generator from working out byte layout, endianness or string
-//! encoding. It does not: the text below is fixed, written once against RFC-0002,
-//! and copied out unchanged. Nothing here is computed per model, per field, or
-//! per run - the generator cannot derive a wire format even in principle,
-//! because it only knows how to `push_str` this.
+//! The generator is forbidden from working out byte layout, endianness or
+//! string encoding, and it does not: the text below is fixed, written once
+//! against RFC-0002, and copied out unchanged. Nothing here is computed per
+//! model, per field, or per run - the generator cannot derive a wire format
+//! even in principle, because it only knows how to `push_str` this.
 //!
-//! Everything is spelled with fully-qualified paths (`::core::…`, `::std::…`) so
-//! the block introduces no `use` of its own and cannot collide with the imports
-//! at the site it is included into.
+//! Everything is spelled with fully-qualified paths (`::core::…`, `::std::…`)
+//! so the block introduces no `use` of its own and cannot collide with the
+//! imports at the site it is included into.
+//!
+//! # What changed from `cyclonec_old`
+//!
+//! One method: [`Reader::field_absent`]. The old runtime gave a generated
+//! decoder no way to tell *this field never arrived* from *this field arrived
+//! truncated* - every read simply returned `UnexpectedEof` - so the decoder
+//! could not implement RFC-0002 §9.1 at all. See `generator::rust` for what the
+//! generated decoder does with it.
 
-/// The runtime block, emitted once at the top of every generated file.
+/// The runtime block, emitted once, into its own file.
 pub const RUNTIME: &str = r####"
 // ==========================================================================
 // Cyclone runtime - RFC-0002, carried verbatim.
 //
-// Not generated from your models: this block is identical in every file
-// cyclonec writes. It is here so the file is self-contained.
+// Not generated from your models: this block is identical in every project
+// cyclonec generates for. It is here so the generated tree is self-contained -
+// nothing to add to Cargo.toml, nothing to import.
 // ==========================================================================
 
 /// A byte stream that does not satisfy the Cyclone Specification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum DecodeError {
-    /// Fewer bytes remain than the value being read requires.
+    /// Fewer bytes remain than the value being read requires, **after the read
+    /// had already begun**.
+    ///
+    /// Bytes running out exactly on a field boundary is not this error - it is
+    /// version skew (RFC-0002 §9.1), and the generated decoder handles it
+    /// without asking the runtime.
     UnexpectedEof {
         /// Bytes the read needed.
         needed: usize,
         /// Bytes actually left.
         remaining: usize,
     },
-    /// A `bool` byte that is neither `0x00` nor `0x01` (RFC-0002 §3).
+    /// A `bool` byte that is neither `0x00` nor `0x01` (RFC-0002 §2.4).
     InvalidBool(u8),
     /// A `string` region that is not valid UTF-8.
     InvalidUtf8,
@@ -72,7 +78,7 @@ impl ::core::fmt::Display for DecodeError {
 
 impl ::std::error::Error for DecodeError {}
 
-/// Allocation guards applied while decoding (RFC-0002 §4).
+/// Allocation guards applied while decoding (RFC-0002 §12).
 ///
 /// A `u32` length can claim up to 4 GiB, so a decoder that allocates straight
 /// from an untrusted one is a denial-of-service target. These are **not part of
@@ -85,10 +91,7 @@ pub struct Limits {
     pub max_string_len: usize,
     /// Largest accepted byte length of a `bytes` blob.
     pub max_bytes_len: usize,
-    /// Largest accepted element count of an `Array<T>` (RFC-0002 §6). A
-    /// `u32` count can claim up to 4 GiB of elements before a single one is
-    /// even read, so this guards allocation the same way the string/bytes
-    /// limits do.
+    /// Largest accepted element count of an `Array<T>` (RFC-0002 §6).
     pub max_array_count: usize,
 }
 
@@ -236,8 +239,8 @@ impl Writer {
         self.buf.extend_from_slice(value);
     }
 
-    /// Writes an `Array<T>`'s element count (RFC-0002 §6) - the caller
-    /// writes each element itself, in order, right after.
+    /// Writes an `Array<T>`'s element count (RFC-0002 §6) - the caller writes
+    /// each element itself, in order, right after.
     ///
     /// # Panics
     ///
@@ -256,8 +259,8 @@ impl Writer {
 
 /// Reads Cyclone-encoded values from a borrowed buffer.
 ///
-/// Malformed input is always a [`DecodeError`], never a panic, and a failed read
-/// leaves the cursor where it was.
+/// Malformed input is always a [`DecodeError`], never a panic, and a failed
+/// read leaves the cursor where it was.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Reader<'a> {
@@ -289,10 +292,28 @@ impl<'a> Reader<'a> {
     }
 
     /// Whether the cursor has reached the end.
-    ///
-    /// After decoding a complete message this should be true; trailing bytes
-    /// mean the two ends disagree about the schema.
     pub fn is_empty(&self) -> bool {
+        self.remaining() == 0
+    }
+
+    /// Whether the field about to be read is **absent** rather than truncated.
+    ///
+    /// A generated decoder calls this at every field boundary, and it is the
+    /// whole of RFC-0002 §9.1's first rule:
+    ///
+    /// ```text
+    /// remaining() == 0 at a field boundary
+    ///   → the writer's model stopped here; this field and every field after
+    ///     it are absent, and take their zero value. Not an error.
+    ///
+    /// remaining() > 0 but fewer bytes than the field needs
+    ///   → the field started and the stream ran out inside it. That is a
+    ///     truncated packet: DecodeError::UnexpectedEof, never a zero.
+    /// ```
+    ///
+    /// The distinction is the reason this method exists. Treating a partial
+    /// field as a zero would hide packet corruption behind a plausible value.
+    pub fn field_absent(&self) -> bool {
         self.remaining() == 0
     }
 
@@ -380,7 +401,7 @@ impl<'a> Reader<'a> {
     /// Reads a `string`: a `u32` UTF-8 byte length, then that many bytes.
     ///
     /// The length is checked against the limit and against the bytes actually
-    /// remaining **before** anything is allocated.
+    /// remaining **before** anything is allocated (RFC-0002 §10.1).
     pub fn read_string(&mut self) -> ::core::result::Result<::std::string::String, DecodeError> {
         let start = self.pos;
         let len = self.read_len(self.limits.max_string_len)?;
@@ -421,9 +442,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads an `Array<T>`'s element count (RFC-0002 §6), checked against
-    /// [`Limits::max_array_count`] before the caller reads a single
-    /// element - the same allocation guard [`Reader::read_string`] and
-    /// [`Reader::read_bytes`] apply to their own length prefix.
+    /// [`Limits::max_array_count`] before the caller reads a single element.
     pub fn read_array_count(&mut self) -> ::core::result::Result<usize, DecodeError> {
         self.read_len(self.limits.max_array_count)
     }

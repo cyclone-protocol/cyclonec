@@ -1,0 +1,45 @@
+name: cyclone schema
+
+# What this gate is for
+# ---------------------
+# A pull request may not change a wire contract that a peer is already running.
+# Appending a field at the end of a message is fine (RFC-0002 §9.1); removing
+# one, inserting one in the middle, reordering, or changing a wire type is not.
+#
+# The comparison is always **target branch vs this branch**. `github.base_ref`
+# is the branch the pull request would merge into - `develop`, `release/2.1`,
+# whatever this repository actually uses. It is never hard-coded: a baseline
+# pinned to `main` in a repository that merges into `develop` produces a green
+# check that compared a branch against itself.
+#
+# Copy this file into a project that uses Cyclone and change `working-directory`
+# to wherever its cyclone.toml lives.
+
+on:
+  pull_request:
+
+jobs:
+  compatibility:
+    name: schema compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `cyclonec ci` reads the target branch's .cyclone/schema.json out of
+          # git, so the history has to be there to read.
+          fetch-depth: 0
+
+      - name: fetch the target branch
+        run: git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: build cyclonec
+        run: cargo build --release --bin cyclonec
+
+      # 1. the committed schema still describes this branch's source
+      # 2. the target branch's schema, read out of git
+      # 3. the two compared: BREAKING is exit 1, CURRENT/COMPATIBLE is exit 0
+      - name: cyclonec ci
+        working-directory: tests/fixtures
+        run: ../../target/release/cyclonec ci --base-ref "origin/${{ github.base_ref }}"

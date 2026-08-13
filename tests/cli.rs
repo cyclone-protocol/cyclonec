@@ -1,2321 +1,1711 @@
 //! The generator, driven the way a user drives it.
 //!
-//! These run the real binary over real files, so what is asserted is what a user
-//! gets - not what an internal function returns.
+//! These run the real binaries over real files in a real directory, so what is
+//! asserted is what a user gets - not what an internal function returns.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// Runs `cyclonec` with the given arguments.
-fn cyclonec(arguments: &[&str]) -> Output {
+// ===================================================================== harness
+
+/// A clean copy of `tests/fixtures/` - the annotated schema and a
+/// `cyclone.toml` - in a directory of its own.
+fn project(name: &str) -> PathBuf {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/tests")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join("src/models")).expect("create project");
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    std::fs::copy(
+        fixtures.join("cyclone.toml"),
+        directory.join("cyclone.toml"),
+    )
+    .expect("copy cyclone.toml");
+    for entry in std::fs::read_dir(fixtures.join("src/models")).expect("read fixtures") {
+        let path = entry.expect("entry").path();
+        std::fs::copy(
+            &path,
+            directory
+                .join("src/models")
+                .join(path.file_name().expect("name")),
+        )
+        .expect("copy schema");
+    }
+
+    directory
+}
+
+fn cyclonec(directory: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cyclonec"))
+        .current_dir(directory)
         .args(arguments)
         .output()
         .expect("run cyclonec")
 }
 
-/// Writes `source` into a directory of its own and generates from it.
-///
-/// `--out` names the same directory, so the file lands at `cyclone.codec.rs`.
-/// Returns the generated text, or `None` when nothing was written.
-fn generate(name: &str, source: &str) -> (Output, Option<String>) {
-    let directory = scratch(name);
-    let input = directory.join(format!("{name}.rs"));
-    std::fs::write(&input, source).expect("write source");
-
-    let output = cyclonec(&[
-        "--out",
-        directory.to_str().expect("utf-8 path"),
-        input.to_str().expect("utf-8 path"),
-    ]);
-    let generated = std::fs::read_to_string(directory.join("cyclone.codec.rs")).ok();
-
-    (output, generated)
+fn inspect(directory: &Path, arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_cyclone-inspect"))
+        .current_dir(directory)
+        .args(arguments)
+        .output()
+        .expect("run cyclone-inspect")
 }
 
-/// The C# counterpart of [`generate`]: writes `source` as `{name}.cs` and
-/// reads back `cyclone.codec.cs`.
-fn generate_csharp(name: &str, source: &str) -> (Output, Option<String>) {
-    let directory = scratch(name);
-    let input = directory.join(format!("{name}.cs"));
-    std::fs::write(&input, source).expect("write source");
-
-    let output = cyclonec(&[
-        "--out",
-        directory.to_str().expect("utf-8 path"),
-        input.to_str().expect("utf-8 path"),
-    ]);
-    let generated = std::fs::read_to_string(directory.join("cyclone.codec.cs")).ok();
-
-    (output, generated)
-}
-
-/// A clean directory under `target/`, so tests never see each other's files.
-fn scratch(name: &str) -> PathBuf {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests").join(name);
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).expect("create scratch directory");
-    directory
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-// ================================================================== §2, §15
-
-/// §2 - the codecs a model declares are the codecs that get generated. There is
-/// no flag for it, and nothing else decides.
-#[test]
-fn a_model_declares_the_codecs_that_are_generated() {
-    let (output, generated) = generate(
-        "declared",
-        r#"
-        #[network]
-        #[codec(edge, unity)]
-        struct DeviceState {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            id: u32,
-
-            #[network(f32)]
-            #[codec(edge)]
-            temperature: f32,
-
-            #[network(string)]
-            #[codec(unity)]
-            display_name: String,
-        }
-        "#,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("pub struct DeviceStateEdgeCodec;"));
-    assert!(generated.contains("pub struct DeviceStateUnityCodec;"));
-    // §15 - no third codec, invented from nowhere. (`pub struct` alone would
-    // also count the runtime's own types, which every file carries.)
-    assert_eq!(generated.matches("Codec;").count(), 2);
+fn read(directory: &Path, path: &str) -> String {
+    std::fs::read_to_string(directory.join(path))
+        .unwrap_or_else(|error| panic!("read {path}: {error}"))
 }
 
-/// §16 - a codec name is an identifier, and the only thing done with it is
-/// spelling a type. `custom_a` becomes `CustomA`, `orange_pi` becomes `OrangePi`.
+/// Rewrites `Player` in the copied fixture, which is how every evolution test
+/// makes its change.
+fn rewrite_player(directory: &Path, fields: &str) {
+    let source = read(directory, "src/models/player.rs");
+    let start = source.find("pub struct Player {").expect("Player");
+    let end = source[start..].find("\n}\n").expect("end of Player") + start;
+    let replaced = format!("pub struct Player {{\n{fields}");
+    std::fs::write(
+        directory.join("src/models/player.rs"),
+        format!("{}{replaced}{}", &source[..start], &source[end..]),
+    )
+    .expect("write player.rs");
+}
+
+const PLAYER_V1: &str = "\
+    #[network(u32)]\n    #[codec(edge)]\n    pub id: u32,\n\n\
+    #[network(f32)]\n    #[codec(edge)]\n    pub x: f32,\n\n\
+    #[network(f32)]\n    #[codec(edge)]\n    pub y: f32,\n";
+
+// ==================================================================== generate
+
 #[test]
-fn codec_names_become_pascal_case_type_names() {
-    let (output, generated) = generate(
-        "names",
-        r#"
-        #[network]
-        #[codec(edge, orange_pi, unity, custom_a)]
-        struct DeviceState {
-            #[network(u32)]
-            #[codec(edge, orange_pi, unity, custom_a)]
-            id: u32,
-        }
-        "#,
-    );
-
+fn generate_writes_one_file_per_model_per_codec() {
+    let directory = project("generate");
+    let output = cyclonec(&directory, &["generate"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
 
-    for name in [
-        "DeviceStateEdgeCodec",
-        "DeviceStateOrangePiCodec",
-        "DeviceStateUnityCodec",
-        "DeviceStateCustomACodec",
+    for path in [
+        "src/generated/mod.rs",
+        "src/generated/runtime.rs",
+        "src/generated/handshake.rs",
+        "src/generated/player_edge.rs",
+        "src/generated/player_info_edge.rs",
+        "src/generated/team_edge.rs",
+        "src/generated/device_state_edge.rs",
+        "src/generated/device_state_unity.rs",
+        "src/generated/telemetry_orange_pi.rs",
+        ".cyclone/schema.json",
+        ".cyclone/build-graph.json",
     ] {
-        assert!(generated.contains(&format!("pub struct {name};")), "missing {name}");
+        assert!(directory.join(path).exists(), "{path} was not written");
     }
+
+    // Not one file holding everything, the way `cyclonec_old` wrote it.
+    assert!(!directory.join("src/generated/cyclone.codec.rs").exists());
 }
 
-/// A field naming a codec the model never declared cannot conjure one into
-/// existence - §15 forbids a third codec.
+/// Every generated file is a module a user can actually reach: named like an
+/// identifier, declared by `mod.rs`, and importing everything it names -
+/// starting with the model it encodes.
 #[test]
-fn a_field_cannot_invent_a_codec() {
-    let (_, generated) = generate(
-        "invented",
-        r#"
-        #[network]
-        #[codec(edge)]
-        struct DeviceState {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            id: u32,
+fn the_generated_tree_is_a_module_tree() {
+    let directory = project("module-tree");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let root = read(&directory, "src/generated/mod.rs");
+    for entry in std::fs::read_dir(directory.join("src/generated")).expect("read generated") {
+        let name = entry
+            .expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        let module = name.strip_suffix(".rs").expect("a .rs file");
+
+        // `player.edge.rs` could never be reached by `mod`: a dot is not part
+        // of an identifier.
+        assert!(
+            module
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "{name} is not a Rust module name"
+        );
+        if module != "mod" {
+            assert!(
+                root.contains(&format!("pub mod {module};\n")),
+                "{module} is not declared in mod.rs:\n{root}"
+            );
         }
-        "#,
-    );
+    }
 
-    let generated = generated.expect("a codec file");
-    assert!(generated.contains("DeviceStateEdgeCodec"));
-    assert!(!generated.contains("UnityCodec"), "{generated}");
-}
-
-// ====================================================================== §18
-
-/// §18 - the one syntax error worth reporting: the generator was told the field
-/// is on the wire, but not what to write for it.
-#[test]
-fn a_field_network_attribute_needs_a_type() {
-    let (output, generated) = generate(
-        "no_type",
-        r#"
-        #[network]
-        #[codec(edge)]
-        struct Player {
-            #[network]
-            #[codec(edge)]
-            hp: u32,
-        }
-        "#,
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none(), "nothing is written when generation fails");
-
-    let stderr = stderr(&output);
+    let codec = read(&directory, "src/generated/player_edge.rs");
     assert!(
-        stderr.contains("#[network] field requires a network type"),
-        "{stderr}"
+        codec.contains("use super::runtime::{DecodeError, Reader, Writer};\n"),
+        "{codec}"
     );
-    // The line of the `#[network]` itself, so it reads like a compiler error
-    // rather than a shrug.
-    assert!(stderr.contains("no_type.rs:5"), "{stderr}");
+    assert!(
+        codec.contains("use crate::models::player::Player;\n"),
+        "{codec}"
+    );
+
+    // A project uses the codecs it needs and no more. A warning in a file whose
+    // header says DO NOT EDIT is a warning nobody can act on.
+    for path in [
+        "src/generated/mod.rs",
+        "src/generated/runtime.rs",
+        "src/generated/handshake.rs",
+    ] {
+        let text = read(&directory, path);
+        assert!(
+            text.contains("#![allow(dead_code, unused_imports)]\n"),
+            "{path} does not silence its own warnings"
+        );
+    }
+    assert!(
+        codec.contains("#![allow(dead_code, unused_imports)]\n"),
+        "{codec}"
+    );
+
+    let team = read(&directory, "src/generated/team_edge.rs");
+    assert!(
+        team.contains("use super::player_info_edge::PlayerInfoEdgeCodec;\n"),
+        "{team}"
+    );
 }
 
-/// Everything else is `rustc`'s to report. A field whose Rust type cannot hold
-/// its network type is not this generator's business.
+/// Where the models live is the one thing the generator has to be told rather
+/// than assume. `cyclone.toml` says it here; `--model-path` overrides that.
 #[test]
-fn nothing_else_is_validated() {
-    let (output, generated) = generate(
-        "unvalidated",
-        r#"
-        #[network]
-        #[codec(edge)]
-        struct Player {
-            #[network(u32)]
-            #[codec(edge)]
-            hp: u64,
-
-            #[network(NoSuchModel)]
-            #[codec(edge)]
-            info: NoSuchModel,
-        }
-        "#,
+fn the_model_path_can_be_overridden() {
+    let directory = project("model-path");
+    cyclonec(
+        &directory,
+        &["generate", "-q", "--model-path", "crate::schema::wire"],
     );
 
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    // §4 - the declared type is believed, not checked against the Rust one.
-    assert!(generated.contains("writer.write_u32(value.hp);"));
-    // §13 - the call is spelled; whether the symbol exists is rustc's question.
-    assert!(generated.contains("NoSuchModelEdgeCodec::encode(writer, &value.info);"));
+    let codec = read(&directory, "src/generated/player_edge.rs");
+    assert!(
+        codec.contains("use crate::schema::wire::Player;\n"),
+        "{codec}"
+    );
 }
 
-// ================================================================ the parser
-
-/// §17 - the parser is not a Rust parser, but it does know where a token is. A
-/// `struct` in a comment and a `#[network]` in a string are not source.
+/// The tree changed shape once already (one `include!`d file to a module tree).
+/// A root left over from the old shape is exactly the kind of file somebody
+/// finds later and tries to use, so it goes.
 #[test]
-fn comments_and_strings_are_not_source() {
-    let (output, generated) = generate(
-        "lexing",
-        // A longer fence, because the source under test contains a raw string.
-        r##"
-        // #[network] struct Commented { }
-        /* #[network]
-           struct BlockCommented { } */
+fn a_root_from_an_older_layout_is_removed() {
+    let directory = project("old-root");
+    cyclonec(&directory, &["generate", "-q"]);
 
-        #[network]
-        #[codec(edge)]
-        struct Real {
-            #[network(u32)]
-            #[codec(edge)]
-            id: u32,
-        }
+    // Pretend the previous run wrote a `cyclone.rs` root, the way 0.2.0-dev did.
+    let stale = directory.join("src/generated/cyclone.rs");
+    std::fs::write(
+        &stale,
+        "// GENERATED BY cyclonec\ninclude!(\"runtime.rs\");\n",
+    )
+    .expect("write");
+    let graph = read(&directory, ".cyclone/build-graph.json");
+    std::fs::write(
+        directory.join(".cyclone/build-graph.json"),
+        graph.replace(
+            "\"path\": \"src/generated/mod.rs\"",
+            "\"path\": \"src/generated/cyclone.rs\"",
+        ),
+    )
+    .expect("write");
 
-        fn noise() -> &'static str {
-            let _ = '}';
-            let _ = "#[network] struct InAString { }";
-            r#"#[network] struct InARawString { }"#
-        }
-        "##,
-    );
-
+    let output = cyclonec(&directory, &["generate"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
+    assert!(!stale.exists(), "the old root is still there");
+}
 
-    assert!(generated.contains("RealEdgeCodec"));
-    for ghost in ["Commented", "BlockCommented", "InAString", "InARawString"] {
-        assert!(!generated.contains(ghost), "{ghost} is not a model");
+#[test]
+fn every_generated_file_carries_the_header() {
+    let directory = project("header");
+    cyclonec(&directory, &["generate"]);
+
+    let text = read(&directory, "src/generated/player_edge.rs");
+    for line in [
+        "// GENERATED BY cyclonec\n",
+        "// DO NOT EDIT MANUALLY\n",
+        "// source: src/models/player.rs\n",
+        "// model: Player\n",
+        "// codec: edge\n",
+        "// fingerprint: sha256:",
+        "// cyclonec-version: ",
+        "// generated-at: ",
+    ] {
+        assert!(text.contains(line), "missing {line:?} in\n{text}");
     }
 }
 
-/// A file with no models, or none that declared a codec, produces nothing at
-/// all - no empty file left behind to confuse the next reader.
+/// Two runs of the same source produce the same bytes - the timestamp aside,
+/// which is why an unchanged file is not rewritten at all.
 #[test]
-fn a_file_with_nothing_to_generate_writes_nothing() {
-    let (output, generated) = generate("empty", "pub struct Ordinary { pub id: u32 }");
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(generated.is_none());
+fn generating_twice_changes_nothing() {
+    let directory = project("determinism");
+    cyclonec(&directory, &["generate"]);
+    let first = read(&directory, "src/generated/player_edge.rs");
+    let schema = read(&directory, ".cyclone/schema.json");
 
-    let (output, generated) = generate(
-        "no_codecs",
-        r#"
-        #[network]
-        struct Marked {
-            #[network(u32)]
-            id: u32,
-        }
-        "#,
-    );
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(generated.is_none(), "a model that declared no codec generates nothing");
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(output.status.success());
+    assert_eq!(read(&directory, "src/generated/player_edge.rs"), first);
+    assert_eq!(read(&directory, ".cyclone/schema.json"), schema);
+    // Nothing was written, so nothing was reported.
+    assert!(!stderr(&output).contains("src/generated/player_edge.rs"));
 }
 
-// =================================================================== the CLI
-
-/// Generating twice produces byte-identical output, which is what makes
-/// `--check` mean something.
+/// Two runs an hour apart are still two runs of the same schema. Nothing may
+/// depend on the clock - not the file contents, and not the digests in the
+/// build graph.
 #[test]
-fn generation_is_deterministic() {
-    let source = r#"
-        #[network]
-        #[codec(edge, unity)]
-        struct DeviceState {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            id: u32,
-        }
-        "#;
+fn a_later_run_of_an_unchanged_schema_is_still_up_to_date() {
+    let directory = project("later-run");
+    cyclonec(&directory, &["generate"]);
 
-    // The same file name in two directories: the header names the sources, so a
-    // different name would differ for a reason that is not the generator's.
-    let mut rendered = Vec::new();
-    for run in ["deterministic_a", "deterministic_b"] {
-        let directory = scratch(run);
-        let input = directory.join("same_name.rs");
-        std::fs::write(&input, source).expect("write source");
-        assert!(cyclonec(&[
-            "--out",
-            directory.to_str().expect("utf-8 path"),
-            input.to_str().expect("utf-8 path"),
-        ])
-        .status
-        .success());
-        rendered.push(std::fs::read_to_string(directory.join("cyclone.codec.rs")).expect("read"));
+    // What the tree would look like if it had been generated an hour ago.
+    for path in [
+        "src/generated/mod.rs",
+        "src/generated/runtime.rs",
+        "src/generated/handshake.rs",
+        "src/generated/player_edge.rs",
+    ] {
+        let text = read(&directory, path);
+        let aged: String = text
+            .lines()
+            .map(|line| {
+                if line.starts_with("// generated-at: ") {
+                    "// generated-at: 2001-09-09T01:46:40Z".to_owned()
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+        std::fs::write(directory.join(path), format!("{aged}\n")).expect("write");
     }
 
-    assert_eq!(rendered[0], rendered[1]);
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(
+        output.status.success(),
+        "a clock is not a schema change:\n{}",
+        stderr(&output)
+    );
 }
 
-/// `--check` reports staleness and writes nothing; a second run, after
-/// generating, is clean.
 #[test]
-fn check_reports_stale_files() {
-    let directory = scratch("check");
-    let input = directory.join("check.rs");
-    std::fs::write(
-        &input,
-        r#"
-        #[network]
-        #[codec(edge)]
-        struct Player {
-            #[network(u32)]
-            #[codec(edge)]
-            hp: u32,
-        }
-        "#,
-    )
-    .expect("write source");
-
-    let path = input.to_str().expect("utf-8 path");
-    let out = directory.to_str().expect("utf-8 path");
-
-    let stale = cyclonec(&["--check", "--out", out, path]);
-    assert!(!stale.status.success(), "a missing output file is stale");
-    assert!(stderr(&stale).contains("stale"), "{}", stderr(&stale));
-    assert!(!directory.join("cyclone.codec.rs").exists(), "--check writes nothing");
-
-    assert!(cyclonec(&["--out", out, path]).status.success());
-
-    let fresh = cyclonec(&["--check", "--out", out, path]);
-    assert!(fresh.status.success(), "{}", stderr(&fresh));
-    assert!(stderr(&fresh).contains("up to date"), "{}", stderr(&fresh));
-}
-
-/// `--stdout` prints instead of writing.
-#[test]
-fn stdout_writes_no_file() {
-    let directory = scratch("stdout");
-    let input = directory.join("stdout.rs");
-    std::fs::write(
-        &input,
-        r#"
-        #[network]
-        #[codec(edge)]
-        struct Player {
-            #[network(u32)]
-            #[codec(edge)]
-            hp: u32,
-        }
-        "#,
-    )
-    .expect("write source");
-
-    let output = cyclonec(&["--stdout", input.to_str().expect("utf-8 path")]);
+fn the_cli_overrides_cyclone_toml() {
+    let directory = project("cli-over-config");
+    let output = cyclonec(&directory, &["generate", "--out", "elsewhere"]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let printed = String::from_utf8_lossy(&output.stdout);
-    assert!(printed.contains("PlayerEdgeCodec"), "{printed}");
-    assert!(!directory.join("cyclone.codec.rs").exists());
+    assert!(directory.join("elsewhere/mod.rs").exists());
+    assert!(!directory.join("src/generated").exists());
 }
 
-/// The generator never reads its own output back in.
+/// Generating somewhere else for a moment must not delete the tree the project
+/// actually uses. Only files inside the directory this run writes to are ever
+/// removed.
 #[test]
-fn generated_files_are_not_read_again() {
-    let directory = scratch("reread");
+fn generating_elsewhere_leaves_the_real_tree_alone() {
+    let directory = project("out-override");
+    cyclonec(&directory, &["generate", "-q"]);
+    assert!(directory.join("src/generated/player_edge.rs").exists());
+
+    let output = cyclonec(&directory, &["generate", "-q", "--out", "elsewhere"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert!(directory.join("elsewhere/player_edge.rs").exists());
+    assert!(
+        directory.join("src/generated/player_edge.rs").exists(),
+        "a one-off --out deleted the project's generated tree"
+    );
+}
+
+#[test]
+fn check_passes_when_the_tree_is_current_and_fails_when_it_is_not() {
+    let directory = project("check");
+    cyclonec(&directory, &["generate"]);
+
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    rewrite_player(
+        &directory,
+        &format!("{PLAYER_V1}\n    #[network(u32)]\n    #[codec(edge)]\n    pub level: u32,\n"),
+    );
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(!output.status.success(), "a stale tree must fail --check");
+    assert!(stderr(&output).contains("stale:"), "{}", stderr(&output));
+    // --check writes nothing.
+    assert!(!read(&directory, "src/generated/player_edge.rs").contains("level"));
+}
+
+/// A codec whose model is gone leaves no file behind.
+#[test]
+fn a_removed_model_takes_its_generated_file_with_it() {
+    let directory = project("obsolete");
+    cyclonec(&directory, &["generate"]);
+    assert!(directory.join("src/generated/team_edge.rs").exists());
+
+    let source = read(&directory, "src/models/player.rs");
+    let cut = source.find("/// Composites").expect("Team");
+    std::fs::write(directory.join("src/models/player.rs"), &source[..cut]).expect("write");
+
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!directory.join("src/generated/team_edge.rs").exists());
+    assert!(!read(&directory, "src/generated/mod.rs").contains("team_edge"));
+}
+
+// ====================================================================== errors
+
+#[test]
+fn a_network_field_without_a_type_is_reported_with_its_line() {
+    let directory = project("bad-field");
     std::fs::write(
-        directory.join("model.rs"),
-        r#"
-        #[network]
-        #[codec(edge)]
-        struct Player {
-            #[network(u32)]
-            #[codec(edge)]
-            hp: u32,
-        }
-        "#,
+        directory.join("src/models/broken.rs"),
+        "#[network]\n#[codec(edge)]\nstruct Broken {\n    #[network]\n    #[codec(edge)]\n    id: u32,\n}\n",
     )
-    .expect("write source");
+    .expect("write");
 
-    let path = directory.to_str().expect("utf-8 path");
-    assert!(cyclonec(&["--out", path, path]).status.success());
-
-    // A second run over the directory now sees `cyclone.codec.rs` too, and must
-    // skip it: it is the generator's own output, and it holds a runtime full of
-    // ordinary-looking structs.
-    let second = cyclonec(&["--out", path, path]);
-    assert!(second.status.success(), "{}", stderr(&second));
-    assert!(stderr(&second).contains("unchanged"), "{}", stderr(&second));
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("broken.rs:4: #[network] field requires a network type"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
-fn usage_errors_are_reported() {
-    let no_paths = cyclonec(&[]);
-    assert_eq!(no_paths.status.code(), Some(2));
-    assert!(stderr(&no_paths).contains("no input path"));
+fn a_nested_field_routed_into_a_codec_the_referenced_model_lacks_is_reported() {
+    let directory = project("bad-nesting");
+    std::fs::write(
+        directory.join("src/models/nested.rs"),
+        "#[network]\n#[codec(orange_pi)]\nstruct Outer {\n    #[network(PlayerInfo)]\n    \
+         #[codec(orange_pi)]\n    info: PlayerInfo,\n}\n",
+    )
+    .expect("write");
 
-    let unknown = cyclonec(&["--nope", "-o", "out", "x.rs"]);
-    assert_eq!(unknown.status.code(), Some(2));
-    assert!(stderr(&unknown).contains("unknown option"));
-
-    assert!(cyclonec(&["--help"]).status.success());
-    assert!(cyclonec(&["--version"]).status.success());
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("PlayerInfoOrangePiCodec"),
+        "{}",
+        stderr(&output)
+    );
+    // Nothing was written: the schema failed before rendering.
+    assert!(!directory.join("src/generated").exists());
 }
 
-// ============================================================= where it writes
+// =============================================================== compatibility
 
-/// `--out` is required: the output is one file holding every codec, and guessing
-/// where a whole project's codecs belong is not the generator's call.
 #[test]
-fn out_is_required() {
-    let directory = scratch("required");
-    let input = directory.join("model.rs");
-    std::fs::write(&input, "#[network] #[codec(edge)] struct P { #[network(u32)] #[codec(edge)] a: u32, }")
-        .expect("write source");
+fn generate_reports_an_append_as_compatible_and_still_generates() {
+    let directory = project("append");
+    cyclonec(&directory, &["generate"]);
 
-    let output = cyclonec(&[input.to_str().expect("utf-8 path")]);
+    rewrite_player(
+        &directory,
+        &format!("{PLAYER_V1}\n    #[network(u32)]\n    #[codec(edge)]\n    pub level: u32,\n"),
+    );
+    let output = cyclonec(&directory, &["generate"]);
+
+    assert!(output.status.success());
+    let report = stdout(&output);
+    assert!(report.contains("Player.edge:"), "{report}");
+    assert!(report.contains("+ level:u32 at index 3"), "{report}");
+    assert!(report.contains("COMPATIBLE: append-only"), "{report}");
+    assert!(read(&directory, "src/generated/player_edge.rs").contains("value.level"));
+}
+
+/// The one rule the brief is most explicit about: a breaking change is
+/// reported, loudly, and generated anyway.
+#[test]
+fn generate_never_fails_because_of_a_breaking_change() {
+    let directory = project("breaking");
+    cyclonec(&directory, &["generate"]);
+
+    // x and y swapped: same types, same bytes, different meaning.
+    rewrite_player(
+        &directory,
+        "    #[network(u32)]\n    #[codec(edge)]\n    pub id: u32,\n\n\
+             #[network(f32)]\n    #[codec(edge)]\n    pub y: f32,\n\n\
+             #[network(f32)]\n    #[codec(edge)]\n    pub x: f32,\n",
+    );
+    let output = cyclonec(&directory, &["generate"]);
+
+    assert!(
+        output.status.success(),
+        "a breaking change must not fail `generate`"
+    );
+    let report = stdout(&output);
+    assert!(report.contains("field[1]:"), "{report}");
+    assert!(report.contains("old: x:f32"), "{report}");
+    assert!(report.contains("new: y:f32"), "{report}");
+    assert!(report.contains("BREAKING: field order changed"), "{report}");
+}
+
+#[test]
+fn generate_says_nothing_changed_when_nothing_changed() {
+    let directory = project("unchanged");
+    cyclonec(&directory, &["generate"]);
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(
+        stdout(&output).contains("✓ Player.edge unchanged"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn compat_exits_one_on_a_breaking_change_and_zero_otherwise() {
+    let directory = project("compat");
+    cyclonec(&directory, &["generate"]);
+    std::fs::copy(
+        directory.join(".cyclone/schema.json"),
+        directory.join("base.json"),
+    )
+    .expect("copy base");
+
+    // Appending is compatible.
+    rewrite_player(
+        &directory,
+        &format!("{PLAYER_V1}\n    #[network(u32)]\n    #[codec(edge)]\n    pub level: u32,\n"),
+    );
+    let output = cyclonec(&directory, &["compat", "--base", "base.json"]);
+    assert!(output.status.success(), "{}", stdout(&output));
+    assert!(
+        stdout(&output).trim_end().ends_with("COMPATIBLE"),
+        "{}",
+        stdout(&output)
+    );
+
+    // Deleting is not.
+    rewrite_player(
+        &directory,
+        "    #[network(u32)]\n    #[codec(edge)]\n    pub id: u32,\n\n\
+             #[network(f32)]\n    #[codec(edge)]\n    pub x: f32,\n",
+    );
+    let output = cyclonec(&directory, &["compat", "--base", "base.json"]);
+    assert!(!output.status.success());
+    assert!(stdout(&output).contains("BREAKING"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("- y:f32 at index 2"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn compat_compares_two_named_schemas_without_reading_source() {
+    let directory = project("compat-two-files");
+    cyclonec(&directory, &["generate"]);
+    std::fs::copy(
+        directory.join(".cyclone/schema.json"),
+        directory.join("base.json"),
+    )
+    .expect("copy");
+
+    let output = cyclonec(
+        &directory,
+        &[
+            "compat",
+            "--base",
+            "base.json",
+            "--head",
+            ".cyclone/schema.json",
+        ],
+    );
+    assert!(output.status.success());
+    assert!(
+        stdout(&output).trim_end().ends_with("CURRENT"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+// ========================================================================== ci
+
+/// A git repository with the fixture committed on `develop`, and the change
+/// under test on a branch - the shape a pull request actually has.
+fn repository(name: &str, change: Option<&str>) -> Option<PathBuf> {
+    let directory = project(name);
+    let git = |arguments: &[&str]| {
+        Command::new("git")
+            .current_dir(&directory)
+            .args(arguments)
+            .output()
+    };
+
+    if git(&["init", "-b", "develop"]).is_err() {
+        return None;
+    }
+    let _ = git(&["config", "user.email", "cyclone@example.test"]);
+    let _ = git(&["config", "user.name", "Cyclone"]);
+
+    cyclonec(&directory, &["generate", "-q"]);
+    let _ = git(&["add", "-A"]);
+    let _ = git(&["commit", "-m", "schema v1"]);
+
+    if let Some(fields) = change {
+        let _ = git(&["checkout", "-b", "feature/foo"]);
+        rewrite_player(&directory, fields);
+        cyclonec(&directory, &["generate", "-q"]);
+        let _ = git(&["add", "-A"]);
+        let _ = git(&["commit", "-m", "schema v2"]);
+    }
+
+    Some(directory)
+}
+
+#[test]
+fn ci_compares_against_the_named_target_branch() {
+    let Some(directory) = repository(
+        "ci-compatible",
+        Some(&format!(
+            "{PLAYER_V1}\n    #[network(u32)]\n    #[codec(edge)]\n    pub level: u32,\n"
+        )),
+    ) else {
+        return;
+    };
+
+    let output = cyclonec(&directory, &["ci", "--base-ref", "develop"]);
+    let report = stdout(&output);
+    assert!(output.status.success(), "{report}{}", stderr(&output));
+    assert!(report.contains("matches the source"), "{report}");
+    assert!(report.contains("COMPATIBLE"), "{report}");
+}
+
+#[test]
+fn ci_fails_on_a_breaking_change_against_the_target_branch() {
+    let Some(directory) = repository(
+        "ci-breaking",
+        Some(
+            "    #[network(u32)]\n    #[codec(edge)]\n    pub id: u32,\n\n\
+                 #[network(u64)]\n    #[codec(edge)]\n    pub x: f32,\n\n\
+                 #[network(f32)]\n    #[codec(edge)]\n    pub y: f32,\n",
+        ),
+    ) else {
+        return;
+    };
+
+    let output = cyclonec(&directory, &["ci", "--base-ref", "develop"]);
+    let report = stdout(&output);
+    assert!(!output.status.success(), "{report}");
+    assert!(report.contains("BREAKING"), "{report}");
+    assert!(report.contains("wire type changed"), "{report}");
+}
+
+/// A schema that was not regenerated after a source change makes every later
+/// comparison meaningless, so it fails first and says so.
+#[test]
+fn ci_fails_when_the_committed_schema_does_not_match_the_source() {
+    let Some(directory) = repository("ci-stale", None) else {
+        return;
+    };
+    rewrite_player(
+        &directory,
+        &format!("{PLAYER_V1}\n    #[network(u32)]\n    #[codec(edge)]\n    pub level: u32,\n"),
+    );
+
+    let output = cyclonec(&directory, &["ci", "--base-ref", "develop"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("does not match the source"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// The baseline is never assumed. `main` does not exist in this repository, and
+/// nothing pretends otherwise.
+#[test]
+fn ci_requires_a_base_ref() {
+    let directory = project("ci-no-ref");
+    let output = cyclonec(&directory, &["ci"]);
     assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("--out is required"), "{}", stderr(&output));
-}
-
-/// A path ending in `.rs` is the file to write; anything else is a directory
-/// holding `cyclone.codec.rs`. The rule is the extension, not whether the path
-/// already exists, so a first run and a second run agree.
-#[test]
-fn out_names_a_file_or_a_directory() {
-    let directory = scratch("destination");
-    let input = directory.join("model.rs");
-    std::fs::write(&input, "#[network] #[codec(edge)] struct P { #[network(u32)] #[codec(edge)] a: u32, }")
-        .expect("write source");
-    let source = input.to_str().expect("utf-8 path").to_owned();
-
-    // A directory - including one that does not exist yet.
-    let into_directory = directory.join("gen");
-    let output = cyclonec(&["--out", into_directory.to_str().expect("utf-8 path"), &source]);
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(into_directory.join("cyclone.codec.rs").exists());
-
-    // An exact file.
-    let into_file = directory.join("net/codec.rs");
-    let output = cyclonec(&["--out", into_file.to_str().expect("utf-8 path"), &source]);
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(into_file.exists());
-    assert!(!directory.join("net/cyclone.codec.rs").exists());
-}
-
-/// Several sources produce one file, not one file each.
-#[test]
-fn every_source_lands_in_one_file() {
-    let directory = scratch("aggregate");
-    std::fs::write(
-        directory.join("a.rs"),
-        "#[network] #[codec(edge)] struct A { #[network(u32)] #[codec(edge)] a: u32, }",
-    )
-    .expect("write source");
-    std::fs::write(
-        directory.join("b.rs"),
-        "#[network] #[codec(unity)] struct B { #[network(u32)] #[codec(unity)] b: u32, }",
-    )
-    .expect("write source");
-
-    let path = directory.to_str().expect("utf-8 path");
-    assert!(cyclonec(&["--out", path, path]).status.success());
-
-    let generated = std::fs::read_to_string(directory.join("cyclone.codec.rs")).expect("read");
-    assert!(generated.contains("AEdgeCodec"));
-    assert!(generated.contains("BUnityCodec"));
-
-    // Both sources are named in the header, sorted, so the file says where it
-    // came from and two runs agree on the order.
-    assert!(generated.contains("//     a.rs\n//     b.rs\n"), "{generated}");
-}
-
-/// The file carries the runtime, so it compiles with nothing imported and
-/// nothing added to Cargo.toml.
-#[test]
-fn the_output_carries_the_runtime() {
-    let (_, generated) = generate(
-        "selfcontained",
-        r#"
-        #[network]
-        #[codec(edge)]
-        struct Player {
-            #[network(u32)]
-            #[codec(edge)]
-            hp: u32,
-        }
-        "#,
+    assert!(
+        stderr(&output).contains("--base-ref"),
+        "{}",
+        stderr(&output)
     );
+}
 
-    let generated = generated.expect("a codec file");
+// ===================================================================== inspect
 
-    for item in [
-        "pub struct Writer",
-        "pub struct Reader",
-        "pub enum DecodeError",
-        "pub struct Limits",
+#[test]
+fn inspect_decodes_a_packet_through_a_named_schema() {
+    let directory = project("inspect");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let output = inspect(
+        &directory,
+        &[
+            "--schema",
+            ".cyclone/schema.json",
+            "--message",
+            "Player",
+            "--hex",
+            "64000000 00002841 0000A041",
+        ],
+    );
+    let report = stdout(&output);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert!(report.contains("Player.edge"), "{report}");
+    assert!(report.contains("id      : u32 = 100"), "{report}");
+    assert!(report.contains("offset: 0"), "{report}");
+    assert!(report.contains("bytes: 64 00 00 00"), "{report}");
+    assert!(report.contains("x       : f32 = 10.5"), "{report}");
+    assert!(report.contains("offset: 4"), "{report}");
+    assert!(report.contains("y       : f32 = 20.0"), "{report}");
+}
+
+#[test]
+fn inspect_reads_a_binary_file_and_reports_trailing_bytes() {
+    let directory = project("inspect-file");
+    cyclonec(&directory, &["generate", "-q"]);
+    std::fs::write(
+        directory.join("packet.bin"),
+        [
+            0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x28, 0x41, 0x00, 0x00, 0xA0, 0x41, 0xFF, 0xFF,
+        ],
+    )
+    .expect("write packet");
+
+    let output = inspect(
+        &directory,
+        &[
+            "--schema",
+            ".cyclone/schema.json",
+            "--message",
+            "Player.edge",
+            "--file",
+            "packet.bin",
+        ],
+    );
+    let report = stdout(&output);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(report.contains("2 trailing byte(s)"), "{report}");
+}
+
+#[test]
+fn inspect_shows_an_absent_field_rather_than_inventing_one() {
+    let directory = project("inspect-skew");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let output = inspect(
+        &directory,
+        &[
+            "--schema",
+            ".cyclone/schema.json",
+            "--message",
+            "Player",
+            "--hex",
+            "64000000",
+        ],
+    );
+    let report = stdout(&output);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(report.contains("absent"), "{report}");
+}
+
+#[test]
+fn inspect_reports_a_truncated_field_as_an_error() {
+    let directory = project("inspect-truncated");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let output = inspect(
+        &directory,
+        &[
+            "--schema",
+            ".cyclone/schema.json",
+            "--message",
+            "Player",
+            "--hex",
+            "6400000000",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("truncated"), "{}", stderr(&output));
+}
+
+#[test]
+fn inspect_needs_a_codec_when_the_model_has_more_than_one() {
+    let directory = project("inspect-codec");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let output = inspect(
+        &directory,
+        &[
+            "--schema",
+            ".cyclone/schema.json",
+            "--message",
+            "DeviceState",
+            "--hex",
+            "2A000000",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("--codec"), "{}", stderr(&output));
+
+    let output = inspect(
+        &directory,
+        &[
+            "--schema",
+            ".cyclone/schema.json",
+            "--message",
+            "DeviceState",
+            "--codec",
+            "edge",
+            "--hex",
+            "2A000000 0000AC41",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("temperature"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// The schema is named, never guessed - and a fingerprint can be demanded, so
+/// that a packet captured from one build cannot be quietly read through
+/// another.
+#[test]
+fn inspect_can_be_told_which_fingerprint_to_expect() {
+    let directory = project("inspect-fingerprint");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let output = inspect(
+        &directory,
+        &[
+            "--schema",
+            ".cyclone/schema.json",
+            "--message",
+            "Player",
+            "--hex",
+            "64000000",
+            "--expect",
+            "0xDEADBEEFDEADBEEF",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("fingerprint mismatch"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+// ================================================================== the schema
+
+#[test]
+fn the_schema_carries_fingerprints_sources_and_messages() {
+    let directory = project("schema-json");
+    cyclonec(&directory, &["generate", "-q"]);
+    let text = read(&directory, ".cyclone/schema.json");
+
+    assert!(text.contains("\"schema_version\": 1"), "{text}");
+    assert!(text.contains("\"fingerprint\": \"sha256:"), "{text}");
+    assert!(
+        text.contains("\"source\": \"src/models/player.rs\""),
+        "{text}"
+    );
+    assert!(text.contains("\"messages\""), "{text}");
+    assert!(text.contains("\"codecs\""), "{text}");
+}
+
+#[test]
+fn the_build_graph_maps_a_source_to_what_was_generated_from_it() {
+    let directory = project("build-graph");
+    cyclonec(&directory, &["generate", "-q"]);
+    let text = read(&directory, ".cyclone/build-graph.json");
+
+    assert!(text.contains("\"src/models/player.rs\""), "{text}");
+    assert!(text.contains("\"src/generated/player_edge.rs\""), "{text}");
+    assert!(text.contains("\"model\": \"Player\""), "{text}");
+    assert!(text.contains("\"codec\": \"edge\""), "{text}");
+    assert!(text.contains("\"sha256\""), "{text}");
+}
+
+/// The schema is derived from source every run. An out-of-date `schema.json`
+/// on disk changes what is *reported*, never what is generated.
+#[test]
+fn a_stale_schema_json_does_not_decide_what_is_generated() {
+    let directory = project("schema-is-not-input");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let schema = read(&directory, ".cyclone/schema.json");
+    std::fs::write(
+        directory.join(".cyclone/schema.json"),
+        schema.replace("\"name\": \"x\"", "\"name\": \"nonsense\""),
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let generated = read(&directory, "src/generated/player_edge.rs");
+    assert!(generated.contains("value.x"), "{generated}");
+    assert!(!generated.contains("nonsense"), "{generated}");
+}
+
+#[test]
+fn the_generated_tree_matches_the_committed_fixture() {
+    // `tests/generated.rs` compiles the committed tree; this checks it is still
+    // what the generator would write today.
+    let directory = project("fixture-is-current");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for path in [
+        "src/generated/player_edge.rs",
+        "src/generated/handshake.rs",
+        ".cyclone/schema.json",
     ] {
-        assert!(generated.contains(item), "missing {item}");
+        let fresh = read(&directory, path);
+        let committed = std::fs::read_to_string(fixtures.join(path)).expect("committed fixture");
+        assert!(
+            same_but_for_timestamp(&fresh, &committed),
+            "{path} in tests/fixtures/ is out of date - regenerate it"
+        );
+    }
+}
+
+/// The same rule `cyclonec` itself applies when deciding whether to rewrite a
+/// file: only the `generated-at:` line may differ. Checked against both
+/// spellings (`//` for Rust, Go and C#; `#` for GDScript, whose only comment
+/// syntax that is) so one helper serves every backend's fixture comparison.
+fn same_but_for_timestamp(left: &str, right: &str) -> bool {
+    fn timestamp_line(line: &str) -> bool {
+        line.starts_with("// generated-at: ") || line.starts_with("# generated-at: ")
     }
 
-    // Carried, not derived: no `use` of a runtime crate, and nothing to add to
-    // Cargo.toml.
-    assert!(!generated.contains("use cyclone"), "{generated}");
+    left.lines()
+        .zip(right.lines())
+        .all(|(one, other)| one == other || (timestamp_line(one) && timestamp_line(other)))
+        && left.lines().count() == right.lines().count()
 }
 
-// ================================================================= C# - §18
+// ========================================================================= Go
 
-/// §18 "Basic model" - `[Network] [Codec("edge")]` on a class with one field
-/// produces exactly `PlayerEdgeCodec`.
-#[test]
-fn csharp_basic_model() {
-    let (output, generated) = generate_csharp(
-        "basic",
-        r#"
-        using Cyclone;
+/// A clean copy of `tests/fixtures-go/` - the Go counterpart of [`project`]:
+/// `go.mod`, `cyclone.toml`, and the annotated schema, in a directory of its
+/// own so a test can edit it without disturbing the committed fixture.
+fn go_project(name: &str) -> PathBuf {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/tests")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join("src/models")).expect("create project");
 
-        [Network]
-        [Codec("edge")]
-        public class Player
-        {
-            [Network("u32")]
-            [Codec("edge")]
-            public uint Id { get; set; }
-        }
-        "#,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("public static class PlayerEdgeCodec"));
-    assert!(generated.contains("writer.WriteUInt32(value.Id);"));
-    assert_eq!(generated.matches("Codec\n").count(), 1);
-}
-
-/// §18 "Multiple codecs" - `edge` carries `Id` and `Health`; `unity` carries
-/// `Id` and `Name`. Verbatim from the brief.
-#[test]
-fn csharp_multiple_codecs() {
-    let (output, generated) = generate_csharp(
-        "multiple",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge", "unity")]
-        public class Player
-        {
-            [Network("u32")]
-            [Codec("edge", "unity")]
-            public uint Id { get; set; }
-
-            [Network("f32")]
-            [Codec("edge")]
-            public float Health { get; set; }
-
-            [Network("string")]
-            [Codec("unity")]
-            public string Name { get; set; } = string.Empty;
-        }
-        "#,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    let edge = extract_method(&generated, "PlayerEdgeCodec", "Encode");
-    assert!(edge.contains("value.Id"));
-    assert!(edge.contains("value.Health"));
-    assert!(!edge.contains("value.Name"));
-
-    let unity = extract_method(&generated, "PlayerUnityCodec", "Encode");
-    assert!(unity.contains("value.Id"));
-    assert!(unity.contains("value.Name"));
-    assert!(!unity.contains("value.Health"));
-}
-
-/// §18 "Custom codec" - an identifier the generator has never heard of works
-/// exactly like `edge` or `unity`.
-#[test]
-fn csharp_custom_codec_names_need_no_registration() {
-    let (output, generated) = generate_csharp(
-        "custom",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("orange_pi", "custom_protocol")]
-        public class Player
-        {
-            [Network("u32")]
-            [Codec("orange_pi", "custom_protocol")]
-            public uint Id { get; set; }
-        }
-        "#,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("PlayerOrangePiCodec"));
-    assert!(generated.contains("PlayerCustomProtocolCodec"));
-}
-
-/// §18's exact native-type-independence case, and the reason it lives here
-/// rather than in the compiled `tests/csharp/` fixture: `[Network("u32")]` on
-/// a `ulong` reports wire type `u32` - not `u64` - in the generator's own
-/// output, whether or not a C# compiler would accept the mismatch (h.md §2
-/// leaves that question to the C# compiler, not to `cyclonec`).
-#[test]
-fn csharp_native_type_does_not_change_the_wire_type() {
-    let (output, generated) = generate_csharp(
-        "native_type",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge")]
-        public class Reading
-        {
-            [Network("u32")]
-            [Codec("edge")]
-            public ulong Value { get; set; }
-        }
-        "#,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    // u32, not u64: WriteUInt32/ReadUInt32, never WriteUInt64/ReadUInt64. The
-    // runtime block always defines ReadUInt64 (every primitive method lives
-    // there unconditionally), so the codec body - not the whole file - is what
-    // has to be free of it.
-    assert!(generated.contains("writer.WriteUInt32(value.Value);"), "{generated}");
-    assert!(generated.contains("value.Value = reader.ReadUInt32();"), "{generated}");
-
-    let codec = extract_method(&generated, "ReadingEdgeCodec", "Encode");
-    assert!(!codec.contains("WriteUInt64"), "{codec}");
-    let decode = extract_method(&generated, "ReadingEdgeCodec", "Decode");
-    assert!(!decode.contains("ReadUInt64"), "{decode}");
-}
-
-// ============================================================ C# - parity
-
-/// The two scanners reach the same [`cyclone_cli`-style] shape for the same
-/// schema: same codec names, same field routing. (`cyclonec` has no library
-/// target, so this compares generated *text* rather than the IR directly -
-/// the same black-box guarantee a user gets.)
-#[test]
-fn csharp_and_rust_agree_on_codec_names_for_the_same_schema() {
-    let (_, rust) = generate(
-        "parity_rust",
-        r#"
-        #[network]
-        #[codec(edge, unity)]
-        struct DeviceState {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            id: u32,
-            #[network(f32)]
-            #[codec(edge)]
-            temperature: f32,
-        }
-        "#,
-    );
-    let (_, csharp) = generate_csharp(
-        "parity_csharp",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge", "unity")]
-        public class DeviceState
-        {
-            [Network("u32")]
-            [Codec("edge", "unity")]
-            public uint Id { get; set; }
-
-            [Network("f32")]
-            [Codec("edge")]
-            public float Temperature { get; set; }
-        }
-        "#,
-    );
-
-    let rust = rust.expect("a codec file");
-    let csharp = csharp.expect("a codec file");
-
-    for name in ["DeviceStateEdgeCodec", "DeviceStateUnityCodec"] {
-        assert!(rust.contains(name), "{name} missing from Rust output");
-        assert!(csharp.contains(name), "{name} missing from C# output");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-go");
+    for file in ["cyclone.toml", "go.mod"] {
+        std::fs::copy(fixtures.join(file), directory.join(file))
+            .unwrap_or_else(|error| panic!("copy {file}: {error}"));
+    }
+    for entry in std::fs::read_dir(fixtures.join("src/models")).expect("read fixtures") {
+        let path = entry.expect("entry").path();
+        std::fs::copy(
+            &path,
+            directory
+                .join("src/models")
+                .join(path.file_name().expect("name")),
+        )
+        .expect("copy schema");
     }
 
-    // The unity codec carries id but not temperature, on both sides.
-    assert!(!extract_fn(&rust, "DeviceStateUnityCodec", "encode").contains("temperature"));
-    assert!(!extract_method(&csharp, "DeviceStateUnityCodec", "Encode").contains("Temperature"));
+    directory
 }
 
-/// A directory holding both `.rs` and `.cs` sources produces both output
-/// files, each holding only its own language's models.
 #[test]
-fn a_directory_with_both_languages_produces_both_outputs() {
-    let directory = scratch("both_languages");
-    std::fs::write(
-        directory.join("a.rs"),
-        "#[network] #[codec(edge)] struct A { #[network(u32)] #[codec(edge)] a: u32, }",
-    )
-    .expect("write source");
-    std::fs::write(
-        directory.join("b.cs"),
-        r#"using Cyclone;
-        [Network] [Codec("edge")]
-        public class B { [Network("u32")] [Codec("edge")] public uint Value { get; set; } }
-        "#,
-    )
-    .expect("write source");
-
-    let path = directory.to_str().expect("utf-8 path");
-    let output = cyclonec(&["--out", path, path]);
+fn go_generate_writes_one_file_per_model_per_codec_in_one_shared_package() {
+    let directory = go_project("go-generate");
+    let output = cyclonec(&directory, &["generate"]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let rust = std::fs::read_to_string(directory.join("cyclone.codec.rs")).expect("read rust");
-    let csharp = std::fs::read_to_string(directory.join("cyclone.codec.cs")).expect("read csharp");
+    for file in [
+        "src/generated/runtime.go",
+        "src/generated/handshake.go",
+        "src/generated/player_edge.go",
+        "src/generated/player_unity.go",
+        "src/generated/player_info_edge.go",
+        "src/generated/team_edge.go",
+    ] {
+        let text = read(&directory, file);
+        assert!(
+            text.starts_with("// GENERATED BY cyclonec\n"),
+            "{file}: {text}"
+        );
+        assert!(text.contains("package generated\n"), "{file}: {text}");
+    }
 
-    assert!(rust.contains("AEdgeCodec"));
-    assert!(!rust.contains("BEdgeCodec"), "the Rust file must not carry C# models");
-    assert!(csharp.contains("BEdgeCodec"));
-    assert!(!csharp.contains("AEdgeCodec"), "the C# file must not carry Rust models");
+    // The model type is imported and referenced qualified - the codec never
+    // creates a type of its own.
+    let codec = read(&directory, "src/generated/player_edge.go");
+    assert!(codec.contains("models\""), "{codec}");
+    assert!(codec.contains("*models.Player"), "{codec}");
+    // Codecs share one package, so a nested codec is never imported.
+    assert!(!codec.contains("PlayerInfoEdgeCodec\""), "{codec}");
 }
 
-/// An explicit `.cs` destination is C#'s exact file; a Rust sibling is written
-/// alongside it only if Rust models are also present.
 #[test]
-fn explicit_cs_destination_is_exact_and_has_no_rust_sibling_when_none_is_needed() {
-    let directory = scratch("cs_destination");
-    std::fs::write(
-        directory.join("model.cs"),
-        r#"using Cyclone;
-        [Network] [Codec("edge")]
-        public class Player { [Network("u32")] [Codec("edge")] public uint Hp { get; set; } }
-        "#,
-    )
-    .expect("write source");
+fn go_check_passes_when_current_and_fails_when_stale() {
+    let directory = go_project("go-check");
+    cyclonec(&directory, &["generate"]);
 
-    let out = directory.join("net.cs");
-    let output = cyclonec(&[
-        "--out",
-        out.to_str().expect("utf-8 path"),
-        directory.join("model.cs").to_str().expect("utf-8 path"),
-    ]);
+    let output = cyclonec(&directory, &["generate", "--check"]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    assert!(out.exists());
+    let source = read(&directory, "src/models/player.go");
+    std::fs::write(
+        directory.join("src/models/player.go"),
+        source.replace(
+            "Unrouted uint32 `cyclone:\"u32\"`",
+            "Unrouted uint32 `cyclone:\"u32\"`\n\tLevel uint32 `cyclone:\"u32\" codec:\"edge\"`",
+        ),
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(!output.status.success(), "a stale tree must fail --check");
+    assert!(stderr(&output).contains("stale:"), "{}", stderr(&output));
+}
+
+#[test]
+fn go_backend_refuses_array_of_array_rather_than_generate_it_wrong() {
+    let directory = go_project("go-nested-array");
+    std::fs::write(
+        directory.join("src/models/grid.go"),
+        "package models\n\n//cyclone:model codec=edge\ntype Grid struct {\n\
+         \tRows [][]uint8 `cyclone:\"Array<Array<u8>>\" codec:\"edge\"`\n}\n",
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(!output.status.success(), "nested arrays must be refused");
     assert!(
-        !out.with_extension("rs").exists(),
-        "no Rust models exist, so no Rust sibling should be written"
-    );
-}
-
-/// The C# runtime block is carried the same way the Rust one is: no
-/// `using Cyclone.Runtime` (there is no such assembly), just the classes
-/// themselves, ready to compile.
-#[test]
-fn csharp_output_carries_its_own_runtime() {
-    let (_, generated) = generate_csharp(
-        "csharp_selfcontained",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge")]
-        public class Player
-        {
-            [Network("u32")]
-            [Codec("edge")]
-            public uint Hp { get; set; }
-        }
-        "#,
-    );
-
-    let generated = generated.expect("a codec file");
-
-    for item in ["public sealed class Writer", "public ref struct Reader", "public sealed class DecodeException", "public struct Limits"] {
-        assert!(generated.contains(item), "missing {item}");
-    }
-}
-
-/// A `[Network]` field with no wire type is the one error the C# scanner
-/// reports - the exact counterpart of the Rust `#[network]`-with-no-type case.
-#[test]
-fn csharp_network_field_needs_a_wire_type() {
-    let (output, generated) = generate_csharp(
-        "no_wire_type",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge")]
-        public class Player
-        {
-            [Network]
-            [Codec("edge")]
-            public uint Hp { get; set; }
-        }
-        "#,
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none());
-    assert!(stderr(&output).contains("requires a wire type"), "{}", stderr(&output));
-}
-
-/// A struct nothing marks is not a model in C# either, and its neighbours are
-/// unaffected - the same guarantee `an_unmarked_struct_does_not_disturb_the_next_model`
-/// checks on the Rust side.
-#[test]
-fn csharp_unmarked_class_does_not_disturb_the_next_model() {
-    let (output, generated) = generate_csharp(
-        "csharp_unmarked",
-        r#"
-        using Cyclone;
-
-        public class Ignored
-        {
-            public uint Whatever { get; set; }
-        }
-
-        [Network]
-        [Codec("edge")]
-        public class Real
-        {
-            [Network("u32")]
-            [Codec("edge")]
-            public uint Value { get; set; }
-        }
-        "#,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("RealEdgeCodec"));
-    assert!(!generated.contains("Ignored"));
-}
-
-/// Comments and strings are not source in C# either.
-#[test]
-fn csharp_ignores_braces_in_comments_and_strings() {
-    let (output, generated) = generate_csharp(
-        "csharp_lexing",
-        r####"
-        using Cyclone;
-
-        // [Network] public class Commented { }
-        /* [Network]
-           public class BlockCommented { } */
-
-        [Network]
-        [Codec("edge")]
-        public class Real
-        {
-            [Network("string")]
-            [Codec("edge")]
-            public string Name { get; set; } =
-                "a } brace \" in a string { [Network] public class InAString {}";
-
-            [Network("string")]
-            [Codec("edge")]
-            public string Verbatim { get; set; } = @"another } one [Network]";
-        }
-        "####,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("RealEdgeCodec"));
-    assert!(!generated.contains("Commented"));
-    assert!(!generated.contains("InAString"));
-}
-
-/// A property with a default value initializer - `{ get; set; } = expr;` - is
-/// read correctly, including the initializer expression itself, which is
-/// stepped over rather than misread as the end of the class body.
-#[test]
-fn csharp_property_initializers_are_skipped_correctly() {
-    let (output, generated) = generate_csharp(
-        "csharp_initializers",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge")]
-        public class Player
-        {
-            [Network("string")]
-            [Codec("edge")]
-            public string Name { get; set; } = string.Empty;
-
-            [Network("bytes")]
-            [Codec("edge")]
-            public byte[] Blob { get; set; } = System.Array.Empty<byte>();
-
-            [Network("u32")]
-            [Codec("edge")]
-            public uint Id { get; set; }
-        }
-        "#,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    // All three fields were found - the initializers did not swallow `Id`.
-    assert!(generated.contains("value.Name"));
-    assert!(generated.contains("value.Blob"));
-    assert!(generated.contains("value.Id"));
-}
-
-// ================================================================ C# - helpers
-
-/// Extracts the body of one method inside one class from generated C# text -
-/// enough to check which fields a codec's `Encode` touches, without a real
-/// parser.
-fn extract_method<'a>(source: &'a str, class_name: &str, method_name: &str) -> &'a str {
-    let class_at = source.find(&format!("class {class_name}")).unwrap_or_else(|| {
-        panic!("{class_name} not found in:\n{source}")
-    });
-    let method_at = source[class_at..].find(method_name).unwrap_or_else(|| {
-        panic!("{method_name} not found in {class_name}")
-    }) + class_at;
-    let body_start = source[method_at..].find('{').unwrap() + method_at;
-    let body_end = source[body_start..].find("\n    }").unwrap() + body_start;
-    &source[body_start..body_end]
-}
-
-/// The Rust counterpart of [`extract_method`], for the parity test.
-fn extract_fn<'a>(source: &'a str, struct_name: &str, fn_name: &str) -> &'a str {
-    let struct_at = source.find(&format!("impl {struct_name}")).unwrap_or_else(|| {
-        panic!("{struct_name} not found in:\n{source}")
-    });
-    let fn_at =
-        source[struct_at..].find(&format!("fn {fn_name}")).unwrap() + struct_at;
-    let body_start = source[fn_at..].find('{').unwrap() + fn_at;
-    let body_end = source[body_start..].find("\n    }").unwrap() + body_start;
-    &source[body_start..body_end]
-}
-
-// ==================================================================== Go - §18
-
-/// The Go counterpart of [`generate`] / [`generate_csharp`]: writes `source`
-/// as `{name}.go` and reads back `cyclone.codec.go`.
-fn generate_go(name: &str, source: &str) -> (Output, Option<String>) {
-    let directory = scratch(name);
-    let input = directory.join(format!("{name}.go"));
-    std::fs::write(&input, source).expect("write source");
-
-    let output = cyclonec(&[
-        "--out",
-        directory.to_str().expect("utf-8 path"),
-        input.to_str().expect("utf-8 path"),
-    ]);
-    let generated = std::fs::read_to_string(directory.join("cyclone.codec.go")).ok();
-
-    (output, generated)
-}
-
-/// §18 "Basic" - `//cyclone:model codec=edge` on a struct with one tagged
-/// field produces exactly `PlayerEdgeCodec`.
-#[test]
-fn go_basic_model() {
-    let (output, generated) = generate_go(
-        "go_basic",
-        "package models\n\n\
-         //cyclone:model codec=edge\n\
-         type Player struct {\n\
-         \tID uint32 `cyclone:\"u32\" codec:\"edge\"`\n\
-         }\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.starts_with("package models\n"));
-    assert!(generated.contains("type PlayerEdgeCodec struct{}"));
-    assert!(generated.contains("w.WriteU32(value.ID)"));
-    assert_eq!(generated.matches("Codec struct{}").count(), 1);
-}
-
-/// §18 "Multiple codecs" - `edge` carries `ID` and `Temperature`; `unity`
-/// carries `ID` and `Name`. Verbatim from the brief.
-#[test]
-fn go_multiple_codecs() {
-    let (output, generated) = generate_go(
-        "go_multiple",
-        "package models\n\n\
-         //cyclone:model codec=edge,unity\n\
-         type DeviceState struct {\n\
-         \tID          uint32  `cyclone:\"u32\" codec:\"edge,unity\"`\n\
-         \tTemperature float32 `cyclone:\"f32\" codec:\"edge\"`\n\
-         \tName        string  `cyclone:\"string\" codec:\"unity\"`\n\
-         }\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    let edge = extract_go_method(&generated, "DeviceStateEdgeCodec", "Encode");
-    assert!(edge.contains("value.ID"));
-    assert!(edge.contains("value.Temperature"));
-    assert!(!edge.contains("value.Name"));
-
-    let unity = extract_go_method(&generated, "DeviceStateUnityCodec", "Encode");
-    assert!(unity.contains("value.ID"));
-    assert!(unity.contains("value.Name"));
-    assert!(!unity.contains("value.Temperature"));
-}
-
-/// §18 "Custom codec" - identifiers the generator has never heard of work
-/// exactly like `edge` or `unity`.
-#[test]
-fn go_custom_codec_names_need_no_registration() {
-    let (output, generated) = generate_go(
-        "go_custom",
-        "package models\n\n\
-         //cyclone:model codec=edge,orange_pi,custom\n\
-         type DeviceState struct {\n\
-         \tID uint32 `cyclone:\"u32\" codec:\"edge,orange_pi,custom\"`\n\
-         }\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("DeviceStateOrangePiCodec"));
-    assert!(generated.contains("DeviceStateCustomCodec"));
-}
-
-/// §18 "Native type independence" - `cyclone:"u32"` on a `uint64` field
-/// reports wire type `u32`, not `u64`, checked against the generator's own
-/// output text rather than by compiling it (h.md §22 leaves the compiling part
-/// to the Go compiler).
-#[test]
-fn go_native_type_does_not_change_the_wire_type() {
-    let (output, generated) = generate_go(
-        "go_native_type",
-        "package models\n\n\
-         //cyclone:model codec=edge\n\
-         type DeviceState struct {\n\
-         \tID uint64 `cyclone:\"u32\" codec:\"edge\"`\n\
-         }\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("w.WriteU32(value.ID)"), "{generated}");
-    assert!(generated.contains("value.ID, err = r.ReadU32()"), "{generated}");
-
-    let codec = extract_go_method(&generated, "DeviceStateEdgeCodec", "Encode");
-    assert!(!codec.contains("WriteU64"), "{codec}");
-    let decode = extract_go_method(&generated, "DeviceStateEdgeCodec", "Decode");
-    assert!(!decode.contains("ReadU64"), "{decode}");
-}
-
-// ==================================================================== Go - §12
-
-/// §12 - a directive not immediately followed by a struct is a reported error,
-/// never a silent skip.
-#[test]
-fn go_directive_not_followed_by_struct_is_an_error() {
-    let (output, generated) = generate_go(
-        "go_orphan_directive",
-        "package models\n\n\
-         //cyclone:model codec=edge\n\
-         func NotAStruct() {}\n",
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none());
-    assert!(
-        stderr(&output).contains("must be immediately followed by"),
+        stderr(&output).contains("Array<Array<T>>"),
         "{}",
         stderr(&output)
     );
 }
 
-/// A directive on a non-struct type (`type X int`) is the same error.
 #[test]
-fn go_directive_on_non_struct_type_is_an_error() {
-    let (output, _) = generate_go(
-        "go_non_struct",
-        "package models\n\n\
-         //cyclone:model codec=edge\n\
-         type Count int\n",
-    );
+fn go_backend_requires_go_mod_at_the_project_root() {
+    let directory = go_project("go-no-mod");
+    std::fs::remove_file(directory.join("go.mod")).expect("remove go.mod");
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("is not a struct"), "{}", stderr(&output));
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(!output.status.success(), "no go.mod must be refused");
+    assert!(stderr(&output).contains("go.mod"), "{}", stderr(&output));
 }
 
-/// A field tagged `codec:"..."` with no `cyclone:"..."` wire type is the Go
-/// counterpart of Rust's "field requires a network type" and C#'s "field
-/// requires a wire type".
 #[test]
-fn go_field_missing_wire_type_is_an_error() {
-    let (output, generated) = generate_go(
-        "go_missing_wire_type",
-        "package models\n\n\
-         //cyclone:model codec=edge\n\
-         type DeviceState struct {\n\
-         \tID uint32 `codec:\"edge\"`\n\
-         }\n",
-    );
+fn mixed_rust_and_go_sources_in_one_run_are_rejected() {
+    let directory = go_project("go-mixed");
+    // A Rust model dropped into the same `--src` tree as the Go fixture.
+    std::fs::write(
+        directory.join("src/models/extra.rs"),
+        "#[network]\n#[codec(edge)]\nstruct Extra {\n    #[network(u32)]\n    #[codec(edge)]\n    id: u32,\n}\n",
+    )
+    .expect("write");
 
-    assert!(!output.status.success());
-    assert!(generated.is_none());
+    let output = cyclonec(&directory, &["generate"]);
     assert!(
-        stderr(&output).contains("field 'ID' is missing cyclone wire type"),
-        "{}",
-        stderr(&output)
+        !output.status.success(),
+        "mixing languages in one run must be refused"
     );
-}
-
-/// A malformed directive argument is reported rather than silently ignored.
-#[test]
-fn go_malformed_directive_argument_is_an_error() {
-    let (output, _) = generate_go(
-        "go_malformed_directive",
-        "package models\n\n\
-         //cyclone:model banana\n\
-         type Player struct {\n\
-         \tID uint32 `cyclone:\"u32\"`\n\
-         }\n",
-    );
-
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("invalid //cyclone:model directive"), "{}", stderr(&output));
-}
-
-/// `//cyclone:model` with no `codec=` at all is a valid model with zero
-/// codecs - the same as bare `#[network]` in Rust and bare `[Network]` in C#,
-/// keeping semantics identical across all three languages (h.md's own
-/// opening line: "Go chỉ thay đổi cách biểu diễn metadata").
-#[test]
-fn go_model_with_no_codec_is_valid_and_generates_nothing_for_it() {
-    let (output, generated) = generate_go(
-        "go_no_codec",
-        "package models\n\n\
-         //cyclone:model\n\
-         type Marked struct {\n\
-         \tID uint32 `cyclone:\"u32\"`\n\
-         }\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(generated.is_none(), "a model with no codec generates nothing, not an error");
-}
-
-// ==================================================================== Go - misc
-
-/// A struct nothing marks is not a model, and its neighbours are unaffected.
-#[test]
-fn go_unmarked_struct_does_not_disturb_the_next_model() {
-    let (output, generated) = generate_go(
-        "go_unmarked",
-        "package models\n\n\
-         type Ignored struct {\n\
-         \tWhatever uint32\n\
-         }\n\n\
-         //cyclone:model codec=edge\n\
-         type Real struct {\n\
-         \tValue uint32 `cyclone:\"u32\" codec:\"edge\"`\n\
-         }\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("RealEdgeCodec"));
-    assert!(!generated.contains("Ignored"));
-}
-
-/// Comments and strings are not source in Go either, and a `//cyclone:model`
-/// spelled inside a block comment or a string literal is not a directive.
-#[test]
-fn go_ignores_directives_in_comments_and_strings() {
-    let (output, generated) = generate_go(
-        "go_lexing",
-        "package models\n\n\
-         // //cyclone:model codec=edge\n\
-         /* //cyclone:model codec=edge\n\
-            type BlockCommented struct{} */\n\n\
-         //cyclone:model codec=edge\n\
-         type Real struct {\n\
-         \tValue uint32 `cyclone:\"u32\" codec:\"edge\"`\n\
-         }\n\n\
-         func noise() string {\n\
-         \treturn \"//cyclone:model codec=edge\\ntype InAString struct{}\"\n\
-         }\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("RealEdgeCodec"));
-    assert!(!generated.contains("BlockCommented"));
-    assert!(!generated.contains("InAString"));
-}
-
-/// A directive is not fooled by an unrelated comment starting the same way -
-/// `//cyclone:modeling` is not `//cyclone:model`.
-#[test]
-fn go_directive_prefix_needs_a_word_boundary() {
-    let (output, generated) = generate_go(
-        "go_prefix_boundary",
-        "package models\n\n\
-         //cyclone:modeling this is not a directive\n\
-         type NotAModel struct {\n\
-         \tValue uint32\n\
-         }\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(generated.is_none(), "not a directive, so NotAModel is not a model");
-}
-
-/// The `package` clause of the source is carried into the generated file, so
-/// it compiles alongside its models with nothing to configure.
-#[test]
-fn go_output_carries_the_source_package_and_its_own_runtime() {
-    let (_, generated) = generate_go(
-        "go_selfcontained",
-        "package mygame\n\n\
-         //cyclone:model codec=edge\n\
-         type Player struct {\n\
-         \tHP uint32 `cyclone:\"u32\" codec:\"edge\"`\n\
-         }\n",
-    );
-
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.starts_with("package mygame\n"), "{generated}");
-    for item in ["type Writer struct", "type Reader struct", "type DecodeError struct", "type Limits struct"] {
-        assert!(generated.contains(item), "missing {item}");
-    }
-}
-
-// ================================================================ three languages
-
-/// All three scanners reach the same codec names and the same field routing
-/// for the same schema.
-#[test]
-fn all_three_languages_agree_on_codec_names_for_the_same_schema() {
-    let (_, rust) = generate(
-        "parity3_rust",
-        r#"
-        #[network]
-        #[codec(edge, unity)]
-        struct DeviceState {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            id: u32,
-            #[network(f32)]
-            #[codec(edge)]
-            temperature: f32,
-        }
-        "#,
-    );
-    let (_, csharp) = generate_csharp(
-        "parity3_csharp",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge", "unity")]
-        public class DeviceState
-        {
-            [Network("u32")]
-            [Codec("edge", "unity")]
-            public uint Id { get; set; }
-
-            [Network("f32")]
-            [Codec("edge")]
-            public float Temperature { get; set; }
-        }
-        "#,
-    );
-    let (_, go) = generate_go(
-        "parity3_go",
-        "package models\n\n\
-         //cyclone:model codec=edge,unity\n\
-         type DeviceState struct {\n\
-         \tID          uint32  `cyclone:\"u32\" codec:\"edge,unity\"`\n\
-         \tTemperature float32 `cyclone:\"f32\" codec:\"edge\"`\n\
-         }\n",
-    );
-
-    let rust = rust.expect("rust codec file");
-    let csharp = csharp.expect("csharp codec file");
-    let go = go.expect("go codec file");
-
-    for name in ["DeviceStateEdgeCodec", "DeviceStateUnityCodec"] {
-        assert!(rust.contains(name), "{name} missing from Rust output");
-        assert!(csharp.contains(name), "{name} missing from C# output");
-        assert!(go.contains(name), "{name} missing from Go output");
-    }
-
-    // The unity codec carries id but not temperature, on all three.
-    assert!(!extract_fn(&rust, "DeviceStateUnityCodec", "encode").contains("temperature"));
-    assert!(!extract_method(&csharp, "DeviceStateUnityCodec", "Encode").contains("Temperature"));
-    assert!(!extract_go_method(&go, "DeviceStateUnityCodec", "Encode").contains("Temperature"));
-}
-
-/// A directory holding all three languages' sources at once produces all
-/// three output files, each holding only its own language's models.
-#[test]
-fn a_directory_with_all_three_languages_produces_three_outputs() {
-    let directory = scratch("three_languages");
-    std::fs::write(
-        directory.join("a.rs"),
-        "#[network] #[codec(edge)] struct A { #[network(u32)] #[codec(edge)] a: u32, }",
-    )
-    .expect("write source");
-    std::fs::write(
-        directory.join("b.cs"),
-        r#"using Cyclone;
-        [Network] [Codec("edge")]
-        public class B { [Network("u32")] [Codec("edge")] public uint Value { get; set; } }
-        "#,
-    )
-    .expect("write source");
-    std::fs::write(
-        directory.join("c.go"),
-        "package models\n\n\
-         //cyclone:model codec=edge\n\
-         type C struct {\n\
-         \tValue uint32 `cyclone:\"u32\" codec:\"edge\"`\n\
-         }\n",
-    )
-    .expect("write source");
-
-    let path = directory.to_str().expect("utf-8 path");
-    let output = cyclonec(&["--out", path, path]);
-    assert!(output.status.success(), "{}", stderr(&output));
-
-    let rust = std::fs::read_to_string(directory.join("cyclone.codec.rs")).expect("read rust");
-    let csharp = std::fs::read_to_string(directory.join("cyclone.codec.cs")).expect("read csharp");
-    let go = std::fs::read_to_string(directory.join("cyclone.codec.go")).expect("read go");
-
-    assert!(rust.contains("AEdgeCodec") && !rust.contains("BEdgeCodec") && !rust.contains("CEdgeCodec"));
-    assert!(csharp.contains("BEdgeCodec") && !csharp.contains("AEdgeCodec") && !csharp.contains("CEdgeCodec"));
-    assert!(go.contains("CEdgeCodec") && !go.contains("AEdgeCodec") && !go.contains("BEdgeCodec"));
-}
-
-// ================================================================ Go - helpers
-
-/// Extracts the body of one method on one type from generated Go text -
-/// enough to check which fields a codec's `Encode`/`Decode` touches, without a
-/// real parser.
-fn extract_go_method<'a>(source: &'a str, type_name: &str, method_name: &str) -> &'a str {
-    let needle = format!("({type_name}) {method_name}(");
-    let method_at = source
-        .find(&needle)
-        .unwrap_or_else(|| panic!("{needle} not found in:\n{source}"));
-    let body_start = source[method_at..].find('{').unwrap() + method_at;
-    let body_end = source[body_start..].find("\n}").unwrap() + body_start;
-    &source[body_start..body_end]
-}
-
-// ============================================ nested model × multiple codecs
-//
-// h.md audit §3: a field naming a nested model carries its *own* codec
-// membership over to the nested call, one call per codec it is actually
-// routed into - verified end to end (not just for one codec, as the existing
-// composite-model tests already covered, but across the full matrix) for all
-// three languages.
-
-/// Rust: `Player.info` is routed into both `edge` and `unity`, and
-/// `PlayerInfo` declares both, so `PlayerEdgeCodec` must call
-/// `PlayerInfoEdgeCodec` and `PlayerUnityCodec` must call
-/// `PlayerInfoUnityCodec` - never the other way around.
-#[test]
-fn rust_nested_model_with_multiple_codecs_calls_the_matching_nested_codec() {
-    let (output, generated) = generate(
-        "rust_nested_multi",
-        r#"
-        #[network]
-        #[codec(edge, unity)]
-        struct PlayerInfo {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            level: u32,
-        }
-
-        #[network]
-        #[codec(edge, unity)]
-        struct Player {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            hp: u32,
-
-            #[network(PlayerInfo)]
-            #[codec(edge, unity)]
-            info: PlayerInfo,
-        }
-        "#,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    let edge = extract_fn(&generated, "PlayerEdgeCodec", "encode");
-    assert!(edge.contains("PlayerInfoEdgeCodec::encode"), "{edge}");
-    assert!(!edge.contains("PlayerInfoUnityCodec"), "{edge}");
-
-    let unity = extract_fn(&generated, "PlayerUnityCodec", "encode");
-    assert!(unity.contains("PlayerInfoUnityCodec::encode"), "{unity}");
-    assert!(!unity.contains("PlayerInfoEdgeCodec"), "{unity}");
-}
-
-/// The C# counterpart.
-#[test]
-fn csharp_nested_model_with_multiple_codecs_calls_the_matching_nested_codec() {
-    let (output, generated) = generate_csharp(
-        "csharp_nested_multi",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge", "unity")]
-        public class PlayerInfo
-        {
-            [Network("u32")]
-            [Codec("edge", "unity")]
-            public uint Level { get; set; }
-        }
-
-        [Network]
-        [Codec("edge", "unity")]
-        public class Player
-        {
-            [Network("u32")]
-            [Codec("edge", "unity")]
-            public uint Hp { get; set; }
-
-            [Network("PlayerInfo")]
-            [Codec("edge", "unity")]
-            public PlayerInfo Info { get; set; } = new PlayerInfo();
-        }
-        "#,
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    let edge = extract_method(&generated, "PlayerEdgeCodec", "Encode");
-    assert!(edge.contains("PlayerInfoEdgeCodec.Encode"), "{edge}");
-    assert!(!edge.contains("PlayerInfoUnityCodec"), "{edge}");
-
-    let unity = extract_method(&generated, "PlayerUnityCodec", "Encode");
-    assert!(unity.contains("PlayerInfoUnityCodec.Encode"), "{unity}");
-    assert!(!unity.contains("PlayerInfoEdgeCodec"), "{unity}");
-}
-
-/// The Go counterpart.
-#[test]
-fn go_nested_model_with_multiple_codecs_calls_the_matching_nested_codec() {
-    let (output, generated) = generate_go(
-        "go_nested_multi",
-        "package models\n\n\
-         //cyclone:model codec=edge,unity\n\
-         type PlayerInfo struct {\n\
-         \tLevel uint32 `cyclone:\"u32\" codec:\"edge,unity\"`\n\
-         }\n\n\
-         //cyclone:model codec=edge,unity\n\
-         type Player struct {\n\
-         \tHP   uint32     `cyclone:\"u32\" codec:\"edge,unity\"`\n\
-         \tInfo PlayerInfo `cyclone:\"PlayerInfo\" codec:\"edge,unity\"`\n\
-         }\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    let edge = extract_go_method(&generated, "PlayerEdgeCodec", "Encode");
-    assert!(edge.contains("PlayerInfoEdgeCodec{}).Encode"), "{edge}");
-    assert!(!edge.contains("PlayerInfoUnityCodec"), "{edge}");
-
-    let unity = extract_go_method(&generated, "PlayerUnityCodec", "Encode");
-    assert!(unity.contains("PlayerInfoUnityCodec{}).Encode"), "{unity}");
-    assert!(!unity.contains("PlayerInfoEdgeCodec"), "{unity}");
-}
-
-// ================================================== nested codec mismatch
-//
-// h.md audit §4: a field routes a nested model into a codec the nested model
-// itself never declared - `PlayerInfoOrangePiCodec` would never be generated,
-// so this must be a reported error, not a silently emitted dangling call.
-//
-// This exact scenario compiled without complaint before the audit (the three
-// backends render one model at a time and never checked another model's own
-// codec list), so these are regression tests for a real bug, not a
-// speculative one: `cyclonec` used to emit a call to a type it would never
-// generate, leaving the mistake for a confusing host-compiler error instead
-// of catching it itself.
-
-#[test]
-fn rust_nested_codec_mismatch_is_a_reported_error() {
-    let (output, generated) = generate(
-        "rust_nested_mismatch",
-        r#"
-        #[network]
-        #[codec(edge, unity)]
-        struct PlayerInfo {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            level: u32,
-        }
-
-        #[network]
-        #[codec(edge, orange_pi)]
-        struct Player {
-            #[network(u32)]
-            #[codec(edge, orange_pi)]
-            hp: u32,
-
-            #[network(PlayerInfo)]
-            #[codec(edge, orange_pi)]
-            info: PlayerInfo,
-        }
-        "#,
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none(), "nothing is written when validation fails");
-
     let message = stderr(&output);
-    assert!(message.contains("'Player'"), "{message}");
-    assert!(message.contains("'info'"), "{message}");
-    assert!(message.contains("'orange_pi'"), "{message}");
-    assert!(message.contains("'PlayerInfo'"), "{message}");
-    assert!(message.contains("edge, unity"), "{message}");
-}
-
-/// The same dangling-reference audit as `rust_nested_codec_mismatch_is_a_reported_error`,
-/// but for `Array<PlayerInfo>` - the element type must be checked, not just a
-/// bare model-typed field.
-#[test]
-fn rust_array_of_nested_model_codec_mismatch_is_a_reported_error() {
-    let (output, generated) = generate(
-        "rust_array_nested_mismatch",
-        r#"
-        #[network]
-        #[codec(edge, unity)]
-        struct PlayerInfo {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            level: u32,
-        }
-
-        #[network]
-        #[codec(edge, orange_pi)]
-        struct Team {
-            #[network(Array<PlayerInfo>)]
-            #[codec(edge, orange_pi)]
-            players: Vec<PlayerInfo>,
-        }
-        "#,
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none(), "nothing is written when validation fails");
-
-    let message = stderr(&output);
-    assert!(message.contains("'Team'"), "{message}");
-    assert!(message.contains("'players'"), "{message}");
-    assert!(message.contains("'orange_pi'"), "{message}");
-    assert!(message.contains("'PlayerInfo'"), "{message}");
-    assert!(message.contains("edge, unity"), "{message}");
-}
-
-#[test]
-fn csharp_nested_codec_mismatch_is_a_reported_error() {
-    let (output, generated) = generate_csharp(
-        "csharp_nested_mismatch",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge", "unity")]
-        public class PlayerInfo
-        {
-            [Network("u32")]
-            [Codec("edge", "unity")]
-            public uint Level { get; set; }
-        }
-
-        [Network]
-        [Codec("edge", "orange_pi")]
-        public class Player
-        {
-            [Network("u32")]
-            [Codec("edge", "orange_pi")]
-            public uint Hp { get; set; }
-
-            [Network("PlayerInfo")]
-            [Codec("edge", "orange_pi")]
-            public PlayerInfo Info { get; set; } = new PlayerInfo();
-        }
-        "#,
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none());
-
-    let message = stderr(&output);
-    assert!(message.contains("'Player'"), "{message}");
-    assert!(message.contains("'Info'"), "{message}");
-    assert!(message.contains("'orange_pi'"), "{message}");
-    assert!(message.contains("'PlayerInfo'"), "{message}");
-}
-
-#[test]
-fn go_nested_codec_mismatch_is_a_reported_error() {
-    let (output, generated) = generate_go(
-        "go_nested_mismatch",
-        "package models\n\n\
-         //cyclone:model codec=edge,unity\n\
-         type PlayerInfo struct {\n\
-         \tLevel uint32 `cyclone:\"u32\" codec:\"edge,unity\"`\n\
-         }\n\n\
-         //cyclone:model codec=edge,orange_pi\n\
-         type Player struct {\n\
-         \tHP   uint32     `cyclone:\"u32\" codec:\"edge,orange_pi\"`\n\
-         \tInfo PlayerInfo `cyclone:\"PlayerInfo\" codec:\"edge,orange_pi\"`\n\
-         }\n",
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none());
-
-    let message = stderr(&output);
-    assert!(message.contains("'Player'"), "{message}");
-    assert!(message.contains("'Info'"), "{message}");
-    assert!(message.contains("'orange_pi'"), "{message}");
-    assert!(message.contains("'PlayerInfo'"), "{message}");
-}
-
-/// The validation is per language: a Rust model and a Go model that happen to
-/// share a name in the same run must not cross-validate against each other -
-/// each language's models are checked only against that language's own set.
-#[test]
-fn nested_codec_validation_does_not_cross_languages() {
-    let directory = scratch("cross_language_validation");
-    // A Rust `PlayerInfo` with only `edge` - if Go's `Player` (below) were
-    // ever checked against it, this would wrongly fail.
-    std::fs::write(
-        directory.join("info.rs"),
-        "#[network] #[codec(edge)] struct PlayerInfo { \
-         #[network(u32)] #[codec(edge)] level: u32, }",
-    )
-    .expect("write source");
-    // Go's own `PlayerInfo` and `Player`, self-consistent, both routing
-    // `unity` - must succeed regardless of the unrelated Rust type above.
-    std::fs::write(
-        directory.join("models.go"),
-        "package models\n\n\
-         //cyclone:model codec=unity\n\
-         type PlayerInfo struct {\n\
-         \tLevel uint32 `cyclone:\"u32\" codec:\"unity\"`\n\
-         }\n\n\
-         //cyclone:model codec=unity\n\
-         type Player struct {\n\
-         \tInfo PlayerInfo `cyclone:\"PlayerInfo\" codec:\"unity\"`\n\
-         }\n",
-    )
-    .expect("write source");
-
-    let path = directory.to_str().expect("utf-8 path");
-    let output = cyclonec(&["--out", path, path]);
-    assert!(output.status.success(), "{}", stderr(&output));
-
-    let go = std::fs::read_to_string(directory.join("cyclone.codec.go")).expect("read go");
-    assert!(go.contains("PlayerInfoUnityCodec"));
-}
-
-// =============================================================== GDScript
-
-/// The GDScript counterpart of [`generate`] / [`generate_csharp`] /
-/// [`generate_go`]: writes `source` as `{name}.gd` and reads back
-/// `cyclone.codec.gd`.
-fn generate_gdscript(name: &str, source: &str) -> (Output, Option<String>) {
-    let directory = scratch(name);
-    let input = directory.join(format!("{name}.gd"));
-    std::fs::write(&input, source).expect("write source");
-
-    let output = cyclonec(&[
-        "--out",
-        directory.to_str().expect("utf-8 path"),
-        input.to_str().expect("utf-8 path"),
-    ]);
-    let generated = std::fs::read_to_string(directory.join("cyclone.codec.gd")).ok();
-
-    (output, generated)
-}
-
-/// A - parse model metadata: `# cyclone:model codec=godot` followed by
-/// `class_name` produces exactly the one codec declared.
-#[test]
-fn gdscript_basic_model() {
-    let (output, generated) = generate_gdscript(
-        "gd_basic",
-        "# cyclone:model codec=godot\n\
-         class_name Player\n\n\
-         # cyclone:u32 codec=godot\n\
-         var hp: int\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.starts_with("class_name CycloneCodec\n"));
-    assert!(generated.contains("class PlayerGodotCodec:"));
-    assert!(generated.contains("writer.write_u32(value.hp)"));
-    assert_eq!(generated.matches("Codec:").count(), 1);
-}
-
-/// B/C - field metadata, and a field naming more than one codec: `edge` and
-/// `godot` both carry `id`; only `edge` carries `temperature`; only `godot`
-/// carries `name`.
-#[test]
-fn gdscript_multiple_codecs() {
-    let (output, generated) = generate_gdscript(
-        "gd_multiple",
-        "# cyclone:model codec=edge,godot\n\
-         class_name DeviceState\n\n\
-         # cyclone:u32 codec=edge,godot\n\
-         var id: int\n\n\
-         # cyclone:f32 codec=edge\n\
-         var temperature: float\n\n\
-         # cyclone:string codec=godot\n\
-         var device_name: String\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    let edge = extract_gdscript_method(&generated, "DeviceStateEdgeCodec", "encode");
-    assert!(edge.contains("value.id"));
-    assert!(edge.contains("value.temperature"));
-    assert!(!edge.contains("value.device_name"));
-
-    let godot = extract_gdscript_method(&generated, "DeviceStateGodotCodec", "encode");
-    assert!(godot.contains("value.id"));
-    assert!(godot.contains("value.device_name"));
-    assert!(!godot.contains("value.temperature"));
-}
-
-/// D - a field that names exactly one codec is written by that codec alone -
-/// covered above by `temperature`/`device_name`, pinned again on its own.
-#[test]
-fn gdscript_field_can_belong_to_a_single_codec() {
-    let (output, generated) = generate_gdscript(
-        "gd_single_codec",
-        "# cyclone:model codec=edge\n\
-         class_name Reading\n\n\
-         # cyclone:f32 codec=edge\n\
-         var value: float\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-    assert!(generated.contains("ReadingEdgeCodec"));
-}
-
-/// E - a codec target the generator has never heard of needs no registration:
-/// it is opaque metadata, PascalCased into a type name, the same as `edge` or
-/// `godot` - never mistaken for a new Cyclone wire type. h.md's own point: an
-/// unrecognized target is still just a codec identifier, not a schema.
-#[test]
-fn gdscript_unknown_codec_target_needs_no_registration() {
-    let (output, generated) = generate_gdscript(
-        "gd_unknown_target",
-        "# cyclone:model codec=godot,unknown_engine\n\
-         class_name DeviceState\n\n\
-         # cyclone:u32 codec=godot,unknown_engine\n\
-         var id: int\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.contains("DeviceStateGodotCodec"));
-    assert!(generated.contains("DeviceStateUnknownEngineCodec"));
-}
-
-/// F - invalid metadata syntax: a directive argument that is neither empty
-/// nor `codec=...` is reported, not silently ignored.
-#[test]
-fn gdscript_malformed_directive_argument_is_an_error() {
-    let (output, _) = generate_gdscript(
-        "gd_malformed",
-        "# cyclone:model banana\n\
-         class_name Player\n\n\
-         # cyclone:u32\n\
-         var hp: int\n",
-    );
-
-    assert!(!output.status.success());
     assert!(
-        stderr(&output).contains("invalid # cyclone:model directive"),
-        "{}",
-        stderr(&output)
+        message.contains("Rust") && message.contains("Go"),
+        "{message}"
     );
 }
 
-/// F - a `# cyclone:model` not immediately followed by `class_name` is a
-/// reported error, never a silent skip - the GDScript counterpart of Go's
-/// "directive not followed by struct".
 #[test]
-fn gdscript_model_directive_not_followed_by_class_name_is_an_error() {
-    let (output, generated) = generate_gdscript(
-        "gd_orphan_model",
-        "# cyclone:model codec=edge\n\
-         func not_a_class() -> void:\n\
-         \tpass\n",
-    );
+fn the_go_generated_tree_matches_the_committed_fixture() {
+    let directory = go_project("go-fixture-is-current");
+    cyclonec(&directory, &["generate", "-q"]);
 
-    assert!(!output.status.success());
-    assert!(generated.is_none());
-    assert!(
-        stderr(&output).contains("must be immediately followed by a `class_name Name`"),
-        "{}",
-        stderr(&output)
-    );
-}
-
-/// F - a field directive not immediately followed by `var` is the same kind
-/// of error.
-#[test]
-fn gdscript_field_directive_not_followed_by_var_is_an_error() {
-    let (output, generated) = generate_gdscript(
-        "gd_orphan_field",
-        "# cyclone:model codec=edge\n\
-         class_name Player\n\n\
-         # cyclone:u32\n\
-         func not_a_field() -> void:\n\
-         \tpass\n",
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none());
-    assert!(
-        stderr(&output).contains("must be immediately followed by a `var name`"),
-        "{}",
-        stderr(&output)
-    );
-}
-
-/// A field directive with no model yet open to attach it to is reported, not
-/// silently dropped.
-#[test]
-fn gdscript_field_directive_before_any_model_is_an_error() {
-    let (output, generated) = generate_gdscript(
-        "gd_field_before_model",
-        "# cyclone:u32\n\
-         var stray: int\n",
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none());
-    assert!(
-        stderr(&output).contains("no `# cyclone:model` / `class_name` has opened a model yet"),
-        "{}",
-        stderr(&output)
-    );
-}
-
-/// Unlike Go's fixed-prefix `//cyclone:model` match (which treats
-/// `//cyclone:modeling` as an ordinary comment via a word-boundary check),
-/// GDScript's grammar has no such escape hatch: `cyclone:` is compared whole
-/// against a directive head, so anything after `# cyclone:` is *always* an
-/// attempted directive, never silently reinterpreted as an unrelated comment.
-/// `# cyclone:modeling this is not a directive` reads `modeling` as an
-/// attempted wire type and the rest as a malformed `codec=` argument, and is
-/// reported rather than ignored - stricter than Go on purpose: h.md is
-/// explicit that a malformed directive must never pass over in silence, and
-/// there is no way to tell "a typo for `# cyclone:model`" apart from "an
-/// ordinary comment that happens to start with `cyclone:`" without guessing.
-#[test]
-fn gdscript_anything_after_cyclone_colon_is_an_attempted_directive() {
-    let (output, generated) = generate_gdscript(
-        "gd_prefix_boundary",
-        "# cyclone:modeling this is not a directive\n\
-         class_name NotAModel\n\n\
-         var value: int\n",
-    );
-
-    assert!(!output.status.success());
-    assert!(generated.is_none());
-    assert!(
-        stderr(&output).contains("invalid # cyclone:modeling directive"),
-        "{}",
-        stderr(&output)
-    );
-}
-
-/// Blank lines and ordinary (non-Cyclone) comments between a directive and
-/// its declaration do not break the association - the same leniency Go's
-/// token-based scanner has for free.
-#[test]
-fn gdscript_blank_lines_and_ordinary_comments_do_not_break_association() {
-    let (output, generated) = generate_gdscript(
-        "gd_leniency",
-        "# cyclone:model codec=edge\n\
-         \n\
-         # just an ordinary comment, not ours\n\
-         class_name Player\n\n\
-         # cyclone:u32 codec=edge\n\
-         \n\
-         # another ordinary comment\n\
-         var hp: int\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
-    assert!(generated.contains("PlayerEdgeCodec"));
-    assert!(generated.contains("writer.write_u32(value.hp)"));
-}
-
-/// A `class_name` nothing marks is not a model, and does not error - the same
-/// treatment an unmarked `struct`/`class`/`type` gets in the other three
-/// scanners.
-#[test]
-fn gdscript_unmarked_class_is_not_a_model() {
-    let (output, generated) = generate_gdscript(
-        "gd_unmarked",
-        "class_name Ignored\n\n\
-         var whatever: int\n",
-    );
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(generated.is_none(), "nothing marks Ignored, so nothing is generated");
-}
-
-/// G - nested model: a field whose wire type names another model that
-/// declares the same codec is resolved and generates the matching call.
-#[test]
-fn gdscript_nested_model_with_multiple_codecs_calls_the_matching_nested_codec() {
-    let directory = scratch("gd_nested_multi");
-    std::fs::write(
-        directory.join("player_info.gd"),
-        "# cyclone:model codec=edge,unity\n\
-         class_name PlayerInfo\n\n\
-         # cyclone:u32 codec=edge,unity\n\
-         var level: int\n",
-    )
-    .expect("write source");
-    std::fs::write(
-        directory.join("player.gd"),
-        "# cyclone:model codec=edge,unity\n\
-         class_name Player\n\n\
-         # cyclone:u32 codec=edge,unity\n\
-         var hp: int\n\n\
-         # cyclone:PlayerInfo codec=edge,unity\n\
-         var info: PlayerInfo\n",
-    )
-    .expect("write source");
-
-    let path = directory.to_str().expect("utf-8 path");
-    let output = cyclonec(&["--out", path, path]);
-    assert!(output.status.success(), "{}", stderr(&output));
-
-    let generated =
-        std::fs::read_to_string(directory.join("cyclone.codec.gd")).expect("read gdscript");
-
-    let edge = extract_gdscript_method(&generated, "PlayerEdgeCodec", "encode");
-    assert!(edge.contains("PlayerInfoEdgeCodec.new().encode"), "{edge}");
-    assert!(!edge.contains("PlayerInfoUnityCodec"), "{edge}");
-
-    let unity = extract_gdscript_method(&generated, "PlayerUnityCodec", "encode");
-    assert!(unity.contains("PlayerInfoUnityCodec.new().encode"), "{unity}");
-    assert!(!unity.contains("PlayerInfoEdgeCodec"), "{unity}");
-}
-
-/// `Array<T>` over a scalar, a string, and a nested model: each element type
-/// gets the write/read call its own network type would get, wrapped in a
-/// count-prefixed loop - the GDScript counterpart of the byte-identical
-/// golden vector already asserted for Rust, C#, and Go, and confirmed here by
-/// a real Godot run over `tests/fixtures/gdscript/team.gd`.
-#[test]
-fn gdscript_array_of_scalar_string_and_model() {
-    let directory = scratch("gd_array");
-    std::fs::write(
-        directory.join("player_info.gd"),
-        "# cyclone:model codec=edge\n\
-         class_name PlayerInfo\n\n\
-         # cyclone:u32 codec=edge\n\
-         var level: int\n",
-    )
-    .expect("write source");
-    std::fs::write(
-        directory.join("team.gd"),
-        "# cyclone:model codec=edge\n\
-         class_name Team\n\n\
-         # cyclone:Array<u32> codec=edge\n\
-         var scores: Array[int] = []\n\n\
-         # cyclone:Array<string> codec=edge\n\
-         var names: Array[String] = []\n\n\
-         # cyclone:Array<PlayerInfo> codec=edge\n\
-         var players: Array[PlayerInfo] = []\n",
-    )
-    .expect("write source");
-
-    let path = directory.to_str().expect("utf-8 path");
-    let output = cyclonec(&["--out", path, path]);
-    assert!(output.status.success(), "{}", stderr(&output));
-
-    let generated =
-        std::fs::read_to_string(directory.join("cyclone.codec.gd")).expect("read gdscript");
-
-    let encode = extract_gdscript_method(&generated, "TeamEdgeCodec", "encode");
-    assert!(encode.contains("writer.write_array_count(value.scores.size())"), "{encode}");
-    assert!(encode.contains("writer.write_u32(element)"), "{encode}");
-    assert!(encode.contains("writer.write_array_count(value.names.size())"), "{encode}");
-    assert!(encode.contains("writer.write_string(element)"), "{encode}");
-    assert!(encode.contains("writer.write_array_count(value.players.size())"), "{encode}");
-    assert!(encode.contains("PlayerInfoEdgeCodec.new().encode"), "{encode}");
-
-    let decode = extract_gdscript_method(&generated, "TeamEdgeCodec", "decode");
-    assert!(decode.contains("read_array_count"), "{decode}");
-    assert!(decode.contains("read_u32"), "{decode}");
-    assert!(decode.contains("read_string"), "{decode}");
-    assert!(decode.contains("PlayerInfoEdgeCodec.new().decode"), "{decode}");
-}
-
-/// A field routing a nested model into a codec the nested model itself never
-/// declared is a reported error, not a silently emitted dangling call - the
-/// GDScript counterpart of the same audit finding for the other three
-/// languages.
-#[test]
-fn gdscript_nested_codec_mismatch_is_a_reported_error() {
-    let directory = scratch("gd_nested_mismatch");
-    std::fs::write(
-        directory.join("player_info.gd"),
-        "# cyclone:model codec=edge,unity\n\
-         class_name PlayerInfo\n\n\
-         # cyclone:u32 codec=edge,unity\n\
-         var level: int\n",
-    )
-    .expect("write source");
-    std::fs::write(
-        directory.join("player.gd"),
-        "# cyclone:model codec=edge,orange_pi\n\
-         class_name Player\n\n\
-         # cyclone:u32 codec=edge,orange_pi\n\
-         var hp: int\n\n\
-         # cyclone:PlayerInfo codec=edge,orange_pi\n\
-         var info: PlayerInfo\n",
-    )
-    .expect("write source");
-
-    let path = directory.to_str().expect("utf-8 path");
-    let output = cyclonec(&["--out", path, path]);
-    assert!(!output.status.success());
-    assert!(!directory.join("cyclone.codec.gd").exists());
-
-    let message = stderr(&output);
-    assert!(message.contains("'Player'"), "{message}");
-    assert!(message.contains("'info'"), "{message}");
-    assert!(message.contains("'orange_pi'"), "{message}");
-    assert!(message.contains("'PlayerInfo'"), "{message}");
-}
-
-/// The generated file carries the runtime nested inside its own `class_name`
-/// wrapper, so it compiles with nothing added to the Godot project and
-/// nothing to `preload`.
-#[test]
-fn gdscript_output_carries_its_own_runtime_under_one_class_name() {
-    let (_, generated) = generate_gdscript(
-        "gd_selfcontained",
-        "# cyclone:model codec=edge\n\
-         class_name Player\n\n\
-         # cyclone:u32 codec=edge\n\
-         var hp: int\n",
-    );
-
-    let generated = generated.expect("a codec file");
-
-    assert!(generated.starts_with("class_name CycloneCodec\n"));
-    for item in ["class DecodeError:", "class Limits:", "class Writer:", "class Reader:"] {
-        assert!(generated.contains(item), "missing {item}");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-go");
+    for path in [
+        "src/generated/player_edge.go",
+        "src/generated/handshake.go",
+        ".cyclone/schema.json",
+    ] {
+        let fresh = read(&directory, path);
+        let committed = std::fs::read_to_string(fixtures.join(path)).expect("committed fixture");
+        assert!(
+            same_but_for_timestamp(&fresh, &committed),
+            "{path} in tests/fixtures-go/ is out of date - regenerate it"
+        );
     }
-    // No `preload`/`load`: everything is reachable through the one
-    // class_name this file declares.
-    assert!(!generated.contains("preload("), "{generated}");
-    assert!(!generated.contains("load("), "{generated}");
 }
 
-/// h.md's own native-type-independence case: `# cyclone:u32` on a field
-/// declared `var id: float` (a deliberately mismatched native type) reports
-/// wire type `u32` regardless - checked against the generator's own output
-/// text, the same way the Go and C# counterparts are (no Godot compiler is
-/// available in this environment to additionally confirm Godot itself
-/// accepts the mismatched-looking source; see the final report).
-#[test]
-fn gdscript_native_type_does_not_change_the_wire_type() {
-    let (output, generated) = generate_gdscript(
-        "gd_native_type",
-        "# cyclone:model codec=edge\n\
-         class_name Reading\n\n\
-         # cyclone:u32 codec=edge\n\
-         var value: float\n",
-    );
+// ========================================================================= C#
 
-    assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
+/// A clean copy of `tests/fixtures-cs/` - the C# counterpart of [`project`]
+/// and [`go_project`]: `cyclone.toml` and the annotated schema, in a
+/// directory of its own so a test can edit it without disturbing the
+/// committed fixture. Unlike Go, C# needs no project file of its own - a
+/// namespace is self-declared, so there is nothing here to copy beyond the
+/// schema and `cyclone.toml`.
+fn cs_project(name: &str) -> PathBuf {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/tests")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join("src/models")).expect("create project");
 
-    assert!(generated.contains("writer.write_u32(value.value)"), "{generated}");
-    let encode = extract_gdscript_method(&generated, "ReadingEdgeCodec", "encode");
-    assert!(!encode.contains("write_f32"), "{encode}");
-}
-
-/// All four languages agree on codec names and field routing for the same
-/// schema.
-#[test]
-fn all_four_languages_agree_on_codec_names_for_the_same_schema() {
-    let (_, rust) = generate(
-        "parity4_rust",
-        r#"
-        #[network]
-        #[codec(edge, unity)]
-        struct DeviceState {
-            #[network(u32)]
-            #[codec(edge, unity)]
-            id: u32,
-            #[network(f32)]
-            #[codec(edge)]
-            temperature: f32,
-        }
-        "#,
-    );
-    let (_, csharp) = generate_csharp(
-        "parity4_csharp",
-        r#"
-        using Cyclone;
-
-        [Network]
-        [Codec("edge", "unity")]
-        public class DeviceState
-        {
-            [Network("u32")]
-            [Codec("edge", "unity")]
-            public uint Id { get; set; }
-
-            [Network("f32")]
-            [Codec("edge")]
-            public float Temperature { get; set; }
-        }
-        "#,
-    );
-    let (_, go) = generate_go(
-        "parity4_go",
-        "package models\n\n\
-         //cyclone:model codec=edge,unity\n\
-         type DeviceState struct {\n\
-         \tID          uint32  `cyclone:\"u32\" codec:\"edge,unity\"`\n\
-         \tTemperature float32 `cyclone:\"f32\" codec:\"edge\"`\n\
-         }\n",
-    );
-    let (_, gdscript) = generate_gdscript(
-        "parity4_gdscript",
-        "# cyclone:model codec=edge,unity\n\
-         class_name DeviceState\n\n\
-         # cyclone:u32 codec=edge,unity\n\
-         var id: int\n\n\
-         # cyclone:f32 codec=edge\n\
-         var temperature: float\n",
-    );
-
-    let rust = rust.expect("rust codec file");
-    let csharp = csharp.expect("csharp codec file");
-    let go = go.expect("go codec file");
-    let gdscript = gdscript.expect("gdscript codec file");
-
-    for name in ["DeviceStateEdgeCodec", "DeviceStateUnityCodec"] {
-        assert!(rust.contains(name), "{name} missing from Rust output");
-        assert!(csharp.contains(name), "{name} missing from C# output");
-        assert!(go.contains(name), "{name} missing from Go output");
-        assert!(gdscript.contains(name), "{name} missing from GDScript output");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-cs");
+    std::fs::copy(
+        fixtures.join("cyclone.toml"),
+        directory.join("cyclone.toml"),
+    )
+    .expect("copy cyclone.toml");
+    for entry in std::fs::read_dir(fixtures.join("src/models")).expect("read fixtures") {
+        let path = entry.expect("entry").path();
+        std::fs::copy(
+            &path,
+            directory
+                .join("src/models")
+                .join(path.file_name().expect("name")),
+        )
+        .expect("copy schema");
     }
 
-    assert!(!extract_fn(&rust, "DeviceStateUnityCodec", "encode").contains("temperature"));
-    assert!(!extract_method(&csharp, "DeviceStateUnityCodec", "Encode").contains("Temperature"));
-    assert!(!extract_go_method(&go, "DeviceStateUnityCodec", "Encode").contains("Temperature"));
-    assert!(
-        !extract_gdscript_method(&gdscript, "DeviceStateUnityCodec", "encode")
-            .contains("temperature")
-    );
+    directory
 }
 
-/// h.md §11.H - cross-target byte compatibility.
-///
-/// **What this test can and cannot prove.** There is no `godot`/`godot4`
-/// binary in this environment (no network access to install one either), so
-/// nothing here can actually execute the generated GDScript the way
-/// `tests/generated.rs` executes the generated *Rust* (compiling it with
-/// `rustc` and running real `encode`/`decode` calls) or the way `go test` /
-/// `dotnet test` do for Go and C#. A "Rust encode → Cyclone bytes → Godot
-/// decode" round trip through a live Godot process could not be attempted,
-/// let alone verified, and claiming otherwise would be dishonest - see the
-/// final report's "known limitations" section.
-///
-/// What *is* checked, and is the closest honest substitute: the exact golden
-/// byte vector `tests/generated.rs::each_codec_writes_the_fields_that_named_it`
-/// already proves real `rustc`-compiled Rust produces for `DeviceState { id:
-/// 42, temperature: 21.5 }` under RFC-0002 (`u32` id then `f32` temperature,
-/// Little Endian, no padding) is reproduced here as the literal call sequence
-/// `cyclonec` generates for the *same schema* in GDScript -
-/// `write_u32(value.id)` then `write_f32(value.temperature)`, in that order,
-/// nothing between them. [`super::gdscript_runtime::RUNTIME`]'s `write_u32`/
-/// `write_f32` are themselves argued, in that module's own docs, to produce
-/// the identical Little Endian RFC-0002 bytes via `PackedByteArray`'s
-/// verified-by-source (not by execution here) `encode_u32`/`encode_float`.
-/// Chaining "same call sequence" with "each call is documented/sourced to
-/// produce the same bytes" is a structural proof, not an executed one - the
-/// gap a real Godot run would close.
 #[test]
-fn gdscript_generated_call_sequence_matches_the_rust_golden_byte_schema() {
-    let (output, generated) = generate_gdscript(
-        "gd_golden",
-        "# cyclone:model codec=edge\n\
-         class_name DeviceState\n\n\
-         # cyclone:u32 codec=edge\n\
-         var id: int\n\n\
-         # cyclone:f32 codec=edge\n\
-         var temperature: float\n",
-    );
-
+fn cs_generate_writes_one_file_per_model_per_codec_in_one_shared_namespace() {
+    let directory = cs_project("cs-generate");
+    let output = cyclonec(&directory, &["generate"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    let generated = generated.expect("a codec file");
 
-    let encode = extract_gdscript_method(&generated, "DeviceStateEdgeCodec", "encode");
-    let id_at = encode.find("writer.write_u32(value.id)").unwrap_or_else(|| {
-        panic!("write_u32(value.id) not found in:\n{encode}")
-    });
-    let temperature_at =
-        encode.find("writer.write_f32(value.temperature)").unwrap_or_else(|| {
-            panic!("write_f32(value.temperature) not found in:\n{encode}")
-        });
+    for file in [
+        "src/generated/runtime.cs",
+        "src/generated/handshake.cs",
+        "src/generated/player_edge.cs",
+        "src/generated/player_unity.cs",
+        "src/generated/player_info_edge.cs",
+        "src/generated/team_edge.cs",
+    ] {
+        let text = read(&directory, file);
+        assert!(
+            text.starts_with("// GENERATED BY cyclonec\n"),
+            "{file}: {text}"
+        );
+        assert!(text.contains("namespace Generated\n"), "{file}: {text}");
+    }
+
+    // The model type is qualified by its own namespace - the codec never
+    // creates a type of its own.
+    let codec = read(&directory, "src/generated/player_edge.cs");
+    assert!(codec.contains("Models.Player value"), "{codec}");
+    // Same namespace as the generated tree: a nested codec is never qualified.
+    let team = read(&directory, "src/generated/team_edge.cs");
     assert!(
-        id_at < temperature_at,
-        "id must be written before temperature - RFC-0002 has no padding or reordering:\n{encode}"
+        team.contains("PlayerInfoEdgeCodec.Encode(writer, value.Captain);"),
+        "{team}"
     );
-
-    // The decode side reads the identical two fields, in the identical
-    // order, through the identical primitive names - the other half of the
-    // same golden byte vector.
-    let decode = extract_gdscript_method(&generated, "DeviceStateEdgeCodec", "decode");
-    let id_read_at = decode
-        .find("reader.read_u32()")
-        .unwrap_or_else(|| panic!("read_u32() not found in:\n{decode}"));
-    let temperature_read_at = decode
-        .find("reader.read_f32()")
-        .unwrap_or_else(|| panic!("read_f32() not found in:\n{decode}"));
-    assert!(id_read_at < temperature_read_at, "{decode}");
+    // No `using` is ever written - see generator::csharp's module docs.
+    assert!(!codec.contains("using "), "{codec}");
 }
 
-// ============================================================ GDScript - helpers
+#[test]
+fn cs_check_passes_when_current_and_fails_when_stale() {
+    let directory = cs_project("cs-check");
+    cyclonec(&directory, &["generate"]);
 
-/// Extracts the body of one method (`encode`/`decode`) inside one `class
-/// Name:` block (column 0 - see [`super::gdscript::WRAPPER_CLASS_NAME`] for
-/// why it is not textually nested under `class_name`) from generated
-/// GDScript text - enough to check which fields a codec touches, without a
-/// real GDScript parser. Mirrors [`extract_go_method`] / [`extract_method`],
-/// adapted to GDScript's indentation-delimited (rather than
-/// brace-delimited) bodies: a method body ends at the next line back out to
-/// one-tab (`\n\tfunc `) or column-0 (`\nclass ` / `\n# `) indentation, or
-/// at end of file.
-fn extract_gdscript_method<'a>(source: &'a str, type_name: &str, method_name: &str) -> &'a str {
-    let class_needle = format!("class {type_name}:");
-    let class_at = source
-        .find(&class_needle)
-        .unwrap_or_else(|| panic!("{class_needle} not found in:\n{source}"));
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(output.status.success(), "{}", stderr(&output));
 
-    let method_needle = format!("func {method_name}(");
-    let method_at = source[class_at..]
-        .find(&method_needle)
-        .unwrap_or_else(|| panic!("{method_needle} not found in {type_name}"))
-        + class_at;
+    let source = read(&directory, "src/models/Player.cs");
+    std::fs::write(
+        directory.join("src/models/Player.cs"),
+        source.replace(
+            "public uint Unrouted { get; set; }",
+            "public uint Unrouted { get; set; }\n\n    [Network(\"u32\")]\n    [Codec(\"edge\")]\n    public uint Level { get; set; }",
+        ),
+    )
+    .expect("write");
 
-    // The signature line ends at its own trailing `:` (its return type
-    // annotation, `-> void:` or `-> DecodeError:`) immediately before the
-    // newline - every other `:` on the line is followed by a space, not a
-    // newline.
-    let body_start = source[method_at..].find(":\n").unwrap() + method_at + 2;
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(!output.status.success(), "a stale tree must fail --check");
+    assert!(stderr(&output).contains("stale:"), "{}", stderr(&output));
+}
 
-    let rest = &source[body_start..];
-    let body_end = ["\n\tfunc ", "\nclass ", "\n# "]
-        .iter()
-        .filter_map(|needle| rest.find(needle))
-        .min()
-        .unwrap_or(rest.len());
+#[test]
+fn cs_model_path_overrides_the_namespace_the_source_declares() {
+    let directory = cs_project("cs-model-path");
+    cyclonec(&directory, &["generate", "-q", "--model-path", "Game.Wire"]);
 
-    &source[body_start..body_start + body_end]
+    let codec = read(&directory, "src/generated/player_edge.cs");
+    assert!(codec.contains("Game.Wire.Player value"), "{codec}");
+}
+
+#[test]
+fn mixed_rust_and_csharp_sources_in_one_run_are_rejected() {
+    let directory = cs_project("cs-mixed");
+    // A Rust model dropped into the same `--src` tree as the C# fixture.
+    std::fs::write(
+        directory.join("src/models/extra.rs"),
+        "#[network]\n#[codec(edge)]\nstruct Extra {\n    #[network(u32)]\n    #[codec(edge)]\n    id: u32,\n}\n",
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(
+        !output.status.success(),
+        "mixing languages in one run must be refused"
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("Rust") && message.contains("C#"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_cs_generated_tree_matches_the_committed_fixture() {
+    let directory = cs_project("cs-fixture-is-current");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-cs");
+    for path in [
+        "src/generated/player_edge.cs",
+        "src/generated/handshake.cs",
+        ".cyclone/schema.json",
+    ] {
+        let fresh = read(&directory, path);
+        let committed = std::fs::read_to_string(fixtures.join(path)).expect("committed fixture");
+        assert!(
+            same_but_for_timestamp(&fresh, &committed),
+            "{path} in tests/fixtures-cs/ is out of date - regenerate it"
+        );
+    }
+}
+
+// ================================================================== GDScript
+
+/// A clean copy of `tests/fixtures-gd/` - the GDScript counterpart of
+/// [`cs_project`]/[`go_project`]: `cyclone.toml` and the annotated models, in
+/// a directory of its own so a test can edit it without disturbing the
+/// committed fixture. One model per file, since a `.gd` file may declare only
+/// one `class_name` - see `tests/fixtures-gd/src/models/`.
+fn gd_project(name: &str) -> PathBuf {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/tests")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join("src/models")).expect("create project");
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-gd");
+    std::fs::copy(
+        fixtures.join("cyclone.toml"),
+        directory.join("cyclone.toml"),
+    )
+    .expect("copy cyclone.toml");
+    for entry in std::fs::read_dir(fixtures.join("src/models")).expect("read fixtures") {
+        let path = entry.expect("entry").path();
+        std::fs::copy(
+            &path,
+            directory
+                .join("src/models")
+                .join(path.file_name().expect("name")),
+        )
+        .expect("copy schema");
+    }
+
+    directory
+}
+
+#[test]
+fn gd_generate_writes_one_file_per_model_per_codec_with_no_qualification_at_all() {
+    let directory = gd_project("gd-generate");
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    for (file, class_name) in [
+        ("src/generated/runtime.gd", "CycloneRuntime"),
+        ("src/generated/handshake.gd", "CycloneHandshake"),
+        ("src/generated/player_edge.gd", "PlayerEdgeCodec"),
+        ("src/generated/player_unity.gd", "PlayerUnityCodec"),
+        ("src/generated/player_info_edge.gd", "PlayerInfoEdgeCodec"),
+        ("src/generated/team_edge.gd", "TeamEdgeCodec"),
+    ] {
+        let text = read(&directory, file);
+        assert!(
+            text.starts_with("# GENERATED BY cyclonec\n"),
+            "{file}: {text}"
+        );
+        assert!(
+            text.contains(&format!("class_name {class_name}\n")),
+            "{file}: {text}"
+        );
+    }
+
+    // The model type is named bare - never qualified, never a DTO of its own.
+    let codec = read(&directory, "src/generated/player_edge.gd");
+    assert!(codec.contains("value: Player)"), "{codec}");
+    // A nested codec is called bare too - there is nothing to import or
+    // qualify in GDScript, unlike Go's package or C#'s namespace.
+    let team = read(&directory, "src/generated/team_edge.gd");
+    assert!(
+        team.contains("PlayerInfoEdgeCodec.encode(writer, value.captain)"),
+        "{team}"
+    );
+    assert!(!codec.contains("preload("), "{codec}");
+}
+
+#[test]
+fn gd_check_passes_when_current_and_fails_when_stale() {
+    let directory = gd_project("gd-check");
+    cyclonec(&directory, &["generate"]);
+
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let source = read(&directory, "src/models/player.gd");
+    std::fs::write(
+        directory.join("src/models/player.gd"),
+        source.replace(
+            "var cache: String = \"\"",
+            "var cache: String = \"\"\n\n# cyclone:u32 codec=edge\nvar level: int = 0",
+        ),
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(!output.status.success(), "a stale tree must fail --check");
+    assert!(stderr(&output).contains("stale:"), "{}", stderr(&output));
+}
+
+#[test]
+fn gd_model_path_has_no_effect_gdscript_needs_nothing_to_override() {
+    let directory = gd_project("gd-model-path");
+    cyclonec(&directory, &["generate", "-q"]);
+    let without = read(&directory, "src/generated/player_edge.gd");
+
+    let with_override = gd_project("gd-model-path-override");
+    cyclonec(
+        &with_override,
+        &["generate", "-q", "--model-path", "Game.Wire"],
+    );
+    let with = read(&with_override, "src/generated/player_edge.gd");
+
+    assert!(
+        same_but_for_timestamp(&without, &with),
+        "--model-path must have no effect on the GDScript backend:\n{without}\n---\n{with}"
+    );
+}
+
+#[test]
+fn mixed_rust_and_gdscript_sources_in_one_run_are_rejected() {
+    let directory = gd_project("gd-mixed");
+    // A Rust model dropped into the same `--src` tree as the GDScript fixture.
+    std::fs::write(
+        directory.join("src/models/extra.rs"),
+        "#[network]\n#[codec(edge)]\nstruct Extra {\n    #[network(u32)]\n    #[codec(edge)]\n    id: u32,\n}\n",
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(
+        !output.status.success(),
+        "mixing languages in one run must be refused"
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("Rust") && message.contains("GDScript"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_gd_generated_tree_matches_the_committed_fixture() {
+    let directory = gd_project("gd-fixture-is-current");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-gd");
+    for path in [
+        "src/generated/player_edge.gd",
+        "src/generated/team_edge.gd",
+        "src/generated/handshake.gd",
+        ".cyclone/schema.json",
+    ] {
+        let fresh = read(&directory, path);
+        let committed = std::fs::read_to_string(fixtures.join(path)).expect("committed fixture");
+        assert!(
+            same_but_for_timestamp(&fresh, &committed),
+            "{path} in tests/fixtures-gd/ is out of date - regenerate it"
+        );
+    }
+}
+
+// ======================================================================= C++
+
+/// A clean copy of `tests/fixtures-cpp/`'s schema - the C++ counterpart of
+/// [`cs_project`]/[`go_project`]: `cyclone.toml` and the annotated models, in
+/// a directory of its own so a test can edit it without disturbing the
+/// committed fixture. `include/cyclone.h` is not copied: `cyclonec` never
+/// resolves a `#include` line, only skips it as a preprocessor directive (see
+/// `parser::cpp`'s lexer), so nothing here needs it to exist on disk - only
+/// the g++ compile step in CI does.
+fn cpp_project(name: &str) -> PathBuf {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/tests")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join("src/models")).expect("create project");
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-cpp");
+    std::fs::copy(
+        fixtures.join("cyclone.toml"),
+        directory.join("cyclone.toml"),
+    )
+    .expect("copy cyclone.toml");
+    for entry in std::fs::read_dir(fixtures.join("src/models")).expect("read fixtures") {
+        let path = entry.expect("entry").path();
+        std::fs::copy(
+            &path,
+            directory
+                .join("src/models")
+                .join(path.file_name().expect("name")),
+        )
+        .expect("copy schema");
+    }
+
+    directory
+}
+
+#[test]
+fn cpp_generate_writes_one_file_per_model_per_codec_in_one_shared_namespace() {
+    let directory = cpp_project("cpp-generate");
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    for file in [
+        "src/generated/runtime.hpp",
+        "src/generated/handshake.hpp",
+        "src/generated/player_edge.hpp",
+        "src/generated/player_unity.hpp",
+        "src/generated/player_info_edge.hpp",
+        "src/generated/team_edge.hpp",
+    ] {
+        let text = read(&directory, file);
+        assert!(
+            text.starts_with("// GENERATED BY cyclonec\n"),
+            "{file}: {text}"
+        );
+        assert!(text.contains("#pragma once\n"), "{file}: {text}");
+        assert!(text.contains("namespace generated {\n"), "{file}: {text}");
+    }
+
+    // The model type is qualified by its own namespace, and the header that
+    // declares it is `#include`d by its own source path.
+    let codec = read(&directory, "src/generated/player_edge.hpp");
+    assert!(codec.contains("const ::models::Player& value"), "{codec}");
+    assert!(
+        codec.contains("#include \"src/models/player.hpp\"\n"),
+        "{codec}"
+    );
+    // A nested codec is called bare - same generated namespace, so it is
+    // never qualified, only `#include`d by its own generated file name.
+    let team = read(&directory, "src/generated/team_edge.hpp");
+    assert!(
+        team.contains("PlayerInfoEdgeCodec::encode(writer, value.Captain);"),
+        "{team}"
+    );
+    assert!(
+        team.contains("#include \"player_info_edge.hpp\"\n"),
+        "{team}"
+    );
+}
+
+#[test]
+fn cpp_check_passes_when_current_and_fails_when_stale() {
+    let directory = cpp_project("cpp-check");
+    cyclonec(&directory, &["generate"]);
+
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let source = read(&directory, "src/models/player.hpp");
+    std::fs::write(
+        directory.join("src/models/player.hpp"),
+        source.replace(
+            "uint32_t Unrouted = 0;",
+            "uint32_t Unrouted = 0;\n\n    CYCLONE_FIELD(u32)\n    CYCLONE_CODEC(\"edge\")\n    uint32_t Level = 0;",
+        ),
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(!output.status.success(), "a stale tree must fail --check");
+    assert!(stderr(&output).contains("stale:"), "{}", stderr(&output));
+}
+
+#[test]
+fn cpp_model_path_overrides_the_namespace_the_source_declares() {
+    let directory = cpp_project("cpp-model-path");
+    cyclonec(
+        &directory,
+        &["generate", "-q", "--model-path", "Game::Wire"],
+    );
+
+    let codec = read(&directory, "src/generated/player_edge.hpp");
+    assert!(
+        codec.contains("const ::Game::Wire::Player& value"),
+        "{codec}"
+    );
+    // The `#include` path is never affected by `--model-path` - it is always
+    // the model's own physical source location.
+    assert!(
+        codec.contains("#include \"src/models/player.hpp\"\n"),
+        "{codec}"
+    );
+}
+
+#[test]
+fn mixed_rust_and_cpp_sources_in_one_run_are_rejected() {
+    let directory = cpp_project("cpp-mixed");
+    // A Rust model dropped into the same `--src` tree as the C++ fixture.
+    std::fs::write(
+        directory.join("src/models/extra.rs"),
+        "#[network]\n#[codec(edge)]\nstruct Extra {\n    #[network(u32)]\n    #[codec(edge)]\n    id: u32,\n}\n",
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(
+        !output.status.success(),
+        "mixing languages in one run must be refused"
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("Rust") && message.contains("C++"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_cpp_generated_tree_matches_the_committed_fixture() {
+    let directory = cpp_project("cpp-fixture-is-current");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-cpp");
+    for path in [
+        "src/generated/player_edge.hpp",
+        "src/generated/team_edge.hpp",
+        "src/generated/handshake.hpp",
+        ".cyclone/schema.json",
+    ] {
+        let fresh = read(&directory, path);
+        let committed = std::fs::read_to_string(fixtures.join(path)).expect("committed fixture");
+        assert!(
+            same_but_for_timestamp(&fresh, &committed),
+            "{path} in tests/fixtures-cpp/ is out of date - regenerate it"
+        );
+    }
+}
+
+// ========================================================================= C
+
+/// A clean copy of `tests/fixtures-c/`'s schema - the C counterpart of
+/// [`cpp_project`]. `include/cyclone.h` is not copied, for the same reason
+/// [`cpp_project`]'s doc comment gives: `cyclonec` never resolves a
+/// `#include` line, only skips it, so nothing here needs it to exist on disk
+/// - only the gcc compile step in CI does.
+fn c_project(name: &str) -> PathBuf {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/tests")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join("src/models")).expect("create project");
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-c");
+    std::fs::copy(
+        fixtures.join("cyclone.toml"),
+        directory.join("cyclone.toml"),
+    )
+    .expect("copy cyclone.toml");
+    for entry in std::fs::read_dir(fixtures.join("src/models")).expect("read fixtures") {
+        let path = entry.expect("entry").path();
+        std::fs::copy(
+            &path,
+            directory
+                .join("src/models")
+                .join(path.file_name().expect("name")),
+        )
+        .expect("copy schema");
+    }
+
+    directory
+}
+
+#[test]
+fn c_generate_writes_one_file_per_model_per_codec_plus_arrays_and_free_files() {
+    let directory = c_project("c-generate");
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    for file in [
+        "src/generated/runtime.h",
+        "src/generated/arrays.h",
+        "src/generated/handshake.h",
+        "src/generated/player_edge.h",
+        "src/generated/player_unity.h",
+        "src/generated/player_cyclone.h",
+        "src/generated/player_info_edge.h",
+        "src/generated/player_info_cyclone.h",
+        "src/generated/team_edge.h",
+        "src/generated/team_cyclone.h",
+    ] {
+        let text = read(&directory, file);
+        assert!(
+            text.starts_with("// GENERATED BY cyclonec\n"),
+            "{file}: {text}"
+        );
+        assert!(text.contains("#pragma once\n"), "{file}: {text}");
+        // C has no namespace at all - unlike every other backend's shared
+        // file, nothing here opens one.
+        assert!(!text.contains("namespace"), "{file}: {text}");
+    }
+
+    // A model reference is always `struct Name`, never bare - see
+    // `generator::c::struct_type`'s doc comment - and reached by the
+    // model's own physical `#include`, exactly like C++.
+    let codec = read(&directory, "src/generated/player_edge.h");
+    assert!(
+        codec.contains(
+            "static inline bool PlayerEdgeCodec_encode(CycloneWriter *writer, \
+                         const struct Player *value)"
+        ),
+        "{codec}"
+    );
+    assert!(
+        codec.contains("#include \"src/models/player.h\"\n"),
+        "{codec}"
+    );
+
+    // A nested codec is called through its own free function, never a
+    // method - the same free-function shape every generated function here
+    // has.
+    let team = read(&directory, "src/generated/team_edge.h");
+    assert!(
+        team.contains("PlayerInfoEdgeCodec_encode(writer, &value->Captain)"),
+        "{team}"
+    );
+    assert!(team.contains("#include \"player_info_edge.h\"\n"), "{team}");
+
+    // `<Model>_free` lives in its own file, once per model - not once per
+    // codec.
+    let free = read(&directory, "src/generated/player_cyclone.h");
+    assert!(
+        free.contains("static inline void Player_free(struct Player *value)"),
+        "{free}"
+    );
+}
+
+#[test]
+fn c_check_passes_when_current_and_fails_when_stale() {
+    let directory = c_project("c-check");
+    cyclonec(&directory, &["generate"]);
+
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let source = read(&directory, "src/models/player.h");
+    std::fs::write(
+        directory.join("src/models/player.h"),
+        source.replace(
+            "int Cache;",
+            "int Cache;\n\n    CYCLONE_FIELD(u32)\n    CYCLONE_CODEC(\"edge\")\n    uint32_t Level;",
+        ),
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(!output.status.success(), "a stale tree must fail --check");
+    assert!(stderr(&output).contains("stale:"), "{}", stderr(&output));
+}
+
+#[test]
+fn c_model_path_has_no_effect_since_there_is_no_namespace_to_override() {
+    let directory = c_project("c-model-path");
+    cyclonec(&directory, &["generate", "-q"]);
+    let without_override = read(&directory, "src/generated/player_edge.h");
+
+    let with_override = c_project("c-model-path-override");
+    cyclonec(
+        &with_override,
+        &["generate", "-q", "--model-path", "Game::Wire"],
+    );
+    let overridden = read(&with_override, "src/generated/player_edge.h");
+
+    assert_eq!(without_override, overridden);
+    // The `#include` path is, as ever, always the model's own physical
+    // source location.
+    assert!(
+        overridden.contains("#include \"src/models/player.h\"\n"),
+        "{overridden}"
+    );
+}
+
+#[test]
+fn mixed_rust_and_c_sources_in_one_run_are_rejected() {
+    let directory = c_project("c-mixed");
+    // A Rust model dropped into the same `--src` tree as the C fixture.
+    std::fs::write(
+        directory.join("src/models/extra.rs"),
+        "#[network]\n#[codec(edge)]\nstruct Extra {\n    #[network(u32)]\n    #[codec(edge)]\n    id: u32,\n}\n",
+    )
+    .expect("write");
+
+    let output = cyclonec(&directory, &["generate"]);
+    assert!(
+        !output.status.success(),
+        "mixing languages in one run must be refused"
+    );
+    let message = stderr(&output);
+    assert!(message.contains("Rust, C"), "{message}");
+}
+
+#[test]
+fn the_c_generated_tree_matches_the_committed_fixture() {
+    let directory = c_project("c-fixture-is-current");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-c");
+    for path in [
+        "src/generated/player_edge.h",
+        "src/generated/team_edge.h",
+        "src/generated/team_cyclone.h",
+        "src/generated/arrays.h",
+        "src/generated/handshake.h",
+        ".cyclone/schema.json",
+    ] {
+        let fresh = read(&directory, path);
+        let committed = std::fs::read_to_string(fixtures.join(path)).expect("committed fixture");
+        assert!(
+            same_but_for_timestamp(&fresh, &committed),
+            "{path} in tests/fixtures-c/ is out of date - regenerate it"
+        );
+    }
 }

@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "generator": "cyclonec 0.2.0",
+  "fingerprint": "sha256:5407d680d673ae1ed10fc203be18c52a4bb68fe316b47f112367dae9e8421ed4",
+  "fingerprint_u64": "0x5407D680D673AE1E",
+  "models": {
+    "Player": {
+      "source": "src/models/Player.cs",
+      "fingerprint": "sha256:013aff75ac388095b9fd5c394ca53a9c04d43d7c875e88c7fe6ffd50f5bb4603",
+      "codecs": [
+        "edge",
+        "unity"
+      ],
+      "fields": [
+        {
+          "name": "Id",
+          "type": "u32",
+          "codecs": [
+            "edge",
+            "unity"
+          ]
+        },
+        {
+          "name": "X",
+          "type": "f32",
+          "codecs": [
+            "edge"
+          ]
+        },
+        {
+          "name": "Y",
+          "type": "f32",
+          "codecs": [
+            "edge"
+          ]
+        },
+        {
+          "name": "Unrouted",
+          "type": "u32",
+          "codecs": []
+        }
+      ],
+      "messages": {
+        "edge": {
+          "id": "0x432AB486",
+          "fingerprint": "sha256:ee4b267575548a077d0875042492f444282502779bd198cfcc6ee8851545f1a4",
+          "fingerprint_u64": "0xEE4B267575548A07",
+          "fields": [
+            {
+              "name": "Id",
+              "type": "u32"
+            },
+            {
+              "name": "X",
+              "type": "f32"
+            },
+            {
+              "name": "Y",
+              "type": "f32"
+            }
+          ]
+        },
+        "unity": {
+          "id": "0xF4716BBE",
+          "fingerprint": "sha256:293b91b31f6c09852736a76cbabb96a01b4d9ec58036081d26ebed7818d83254",
+          "fingerprint_u64": "0x293B91B31F6C0985",
+          "fields": [
+            {
+              "name": "Id",
+              "type": "u32"
+            }
+          ]
+        }
+      }
+    },
+    "PlayerInfo": {
+      "source": "src/models/Player.cs",
+      "fingerprint": "sha256:d520365f3a499794c809996e539ef5204e413a728c47989985d2b62f3b554a84",
+      "codecs": [
+        "edge"
+      ],
+      "fields": [
+        {
+          "name": "Level",
+          "type": "u32",
+          "codecs": [
+            "edge"
+          ]
+        }
+      ],
+      "messages": {
+        "edge": {
+          "id": "0xC61DC711",
+          "fingerprint": "sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168",
+          "fingerprint_u64": "0xA432F144FB89B1EC",
+          "fields": [
+            {
+              "name": "Level",
+              "type": "u32"
+            }
+          ]
+        }
+      }
+    },
+    "Team": {
+      "source": "src/models/Player.cs",
+      "fingerprint": "sha256:9eaf0daca9a9b82df2c059c269e967b0dbc1d26ed7be3b8ebafc2830457e1092",
+      "codecs": [
+        "edge"
+      ],
+      "fields": [
+        {
+          "name": "Captain",
+          "type": "PlayerInfo",
+          "codecs": [
+            "edge"
+          ]
+        },
+        {
+          "name": "Tags",
+          "type": "Array<string>",
+          "codecs": [
+            "edge"
+          ]
+        },
+        {
+          "name": "Scores",
+          "type": "Array<u32>",
+          "codecs": [
+            "edge"
+          ]
+        },
+        {
+          "name": "Roster",
+          "type": "Array<PlayerInfo>",
+          "codecs": [
+            "edge"
+          ]
+        }
+      ],
+      "messages": {
+        "edge": {
+          "id": "0x90AF7FE0",
+          "fingerprint": "sha256:3b370e0d3205fcdcdef5062d4485c6441ef42bf901818945a374ef31ddd0f0a1",
+          "fingerprint_u64": "0x3B370E0D3205FCDC",
+          "fields": [
+            {
+              "name": "Captain",
+              "type": "PlayerInfo"
+            },
+            {
+              "name": "Tags",
+              "type": "Array<string>"
+            },
+            {
+              "name": "Scores",
+              "type": "Array<u32>"
+            },
+            {
+              "name": "Roster",
+              "type": "Array<PlayerInfo>"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

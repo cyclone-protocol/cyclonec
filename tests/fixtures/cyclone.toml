@@ -1,0 +1,9 @@
+# The fixture project, laid out the way a real crate is: `src/` is the crate
+# root, one annotated model per file under `src/models/`, and the generated tree
+# beside them at `src/generated/`.
+src = "src"
+out = "src/generated"
+
+# No `model_path`: the default reads it off the source layout, exactly as Rust
+# does - src/models/player.rs is crate::models::player, which is where the test
+# crate mounts it.

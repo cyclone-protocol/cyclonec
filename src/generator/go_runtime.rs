@@ -1,23 +1,32 @@
-//! The Cyclone runtime, carried verbatim into every generated Go file.
+//! The Cyclone runtime, carried verbatim into `runtime.go`.
 //!
-//! The Go counterpart of [`super::rust_runtime`] and [`super::csharp_runtime`]
-//! - same reasoning, same guarantee: the block below is fixed, written once
-//! against RFC-0002, and copied out unchanged. Nothing about byte layout is
-//! computed per model, per field, per run, or per language.
+//! The Go counterpart of [`super::rust_runtime`] - same reasoning, same
+//! guarantee: the block below is fixed, written once against RFC-0002, and
+//! copied out unchanged. Nothing about byte layout is computed per model, per
+//! field, or per run.
 //!
-//! Go has no exceptions, so where Rust returns `Result` and C# throws,
-//! `Reader`'s methods return `(T, error)` - the idiom the task's own generated
-//! example already commits to (`value.ID, err = r.ReadU32()`), and the one
-//! every Go codec's `Decode` is written against.
+//! Go has no exceptions, so where Rust returns `Result`, `Reader`'s methods
+//! return `(T, error)` - the idiom every generated `Decode` is written
+//! against: `value.ID, err = r.ReadU32()`.
+//!
+//! # What changed from `cyclonec_old`
+//!
+//! One method: [`Reader::FieldAbsent`] (see the block below). The old runtime
+//! gave a generated decoder no way to tell *this field never arrived* from
+//! *this field arrived truncated* - every read simply returned an
+//! `unexpected_eof` `DecodeError` - so the decoder could not implement
+//! RFC-0002 §9.1 at all. See `generator::go` for what the generated decoder
+//! does with it; the fix is identical in spirit to [`super::rust_runtime`]'s.
 
-/// The runtime block, emitted once at the top of every generated Go file,
-/// right after the package clause.
+/// The runtime block, emitted once, into its own file, right after the
+/// package clause.
 pub const RUNTIME: &str = r####"
 // ==========================================================================
 // Cyclone runtime - RFC-0002, carried verbatim.
 //
-// Not generated from your models: this block is identical in every file
-// cyclonec writes. It is here so the file is self-contained.
+// Not generated from your models: this block is identical in every project
+// cyclonec generates for. It is here so the generated package is
+// self-contained - nothing to add to go.mod, nothing to import.
 // ==========================================================================
 
 import (
@@ -76,7 +85,7 @@ func errLengthOverflow(length, limit int) error {
 	return &DecodeError{Kind: "length_overflow", Length: length, Limit: limit}
 }
 
-// Limits are allocation guards applied while decoding (RFC-0002 §4).
+// Limits are allocation guards applied while decoding (RFC-0002 §12).
 //
 // A uint32 length can claim up to 4 GiB, so a decoder that allocates straight
 // from an untrusted one is a denial-of-service target. These are not part of
@@ -249,6 +258,31 @@ func (r *Reader) Remaining() int {
 // IsEmpty reports whether the cursor has reached the end.
 func (r *Reader) IsEmpty() bool {
 	return r.Remaining() == 0
+}
+
+// FieldAbsent reports whether the field about to be read is absent rather
+// than truncated.
+//
+// A generated decoder calls this at every field boundary, and it is the whole
+// of RFC-0002 §9.1's first rule:
+//
+//	Remaining() == 0 at a field boundary
+//	  -> the writer's model stopped here; this field and every field after
+//	     it are absent, and take their zero value. Not an error.
+//
+//	Remaining() > 0 but fewer bytes than the field needs
+//	  -> the field started and the stream ran out inside it. That is a
+//	     truncated packet: DecodeError{Kind: "unexpected_eof"}, never a zero.
+//
+// The distinction is the reason this method exists. Treating a partial field
+// as a zero would hide packet corruption behind a plausible value.
+func (r *Reader) FieldAbsent() bool {
+	return r.Remaining() == 0
+}
+
+// Limits returns the limits this reader enforces.
+func (r *Reader) Limits() Limits {
+	return r.limits
 }
 
 // ReadBool reads a bool from 1 byte.

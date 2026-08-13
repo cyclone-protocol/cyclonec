@@ -1,25 +1,32 @@
 //! C# source → [`Model`]s.
 //!
-//! Reads `[Network]` / `[Network("TYPE")]` / `[Codec(...)]`, the attributes
-//! defined by `cyclone-attributes` (the C# package, namespace `Cyclone`). See
-//! [`crate::parser`] for what this scanner is and is not, and [`crate::model`]
-//! for why `[Network("u32")]` on a `ulong` property still means the Cyclone wire
-//! type `u32` - this scanner never looks at the C# type beside the attribute,
-//! only at the string inside it.
+//! Reads `[Network]` / `[Network("TYPE")]` / `[Codec(...)]` - the C#
+//! counterpart of Rust's `#[network]` / `#[network(TYPE)]` / `#[codec(...)]`,
+//! meant to be used with a small `Cyclone.Network` / `Cyclone.Codec`
+//! attribute pair a project declares for itself (C# has no equivalent of a
+//! proc-macro crate that only exists to be scanned). See [`crate::parser`]
+//! for what this scanner is and is not - it never looks at the C# type beside
+//! the attribute, only at the string inside it, the same way the Rust scanner
+//! never looks at a field's Rust type.
 //!
 //! # Scope
 //!
 //! A model is a top-level `class` or `struct`; nested types are not specially
 //! recognised (this mirrors the Rust scanner's identical non-handling of a
-//! model inside `mod`). Namespaces are stepped over like any other braces: this
-//! scanner does not qualify a model's name with its namespace, so a codec that
-//! references another model by name relies on both being in scope together at
-//! the point the generated file is compiled - again, the same limitation the
-//! Rust side already has for `mod`.
+//! model inside `mod`). A `namespace` is stepped over like any other braces,
+//! its own name recorded separately by [`namespace_name`] for import
+//! qualification - the same job Go's [`super::go::package_name`] does for a
+//! `package` clause.
+//!
+//! Ported from `cyclonec_old`'s C# scanner with its token handling intact -
+//! the same lexer, the same attribute/member walk, the same one error. What is
+//! new is only that each model and each field now carries the file and line it
+//! was read from, which the IR needs for `schema.json`, the build graph, and
+//! diagnostics that point at source rather than at a schema.
 
 use std::path::Path;
 
-use crate::model::{Field, Language, Model};
+use crate::model::{Field, Model};
 use crate::parser::Error;
 
 /// Extracts every `[Network]` model from `text`.
@@ -31,7 +38,42 @@ use crate::parser::Error;
 /// compiler's to report.
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     let tokens = lex(text);
-    Scanner { path, tokens: &tokens, at: 0 }.file()
+    Scanner {
+        path,
+        tokens: &tokens,
+        at: 0,
+    }
+    .file()
+}
+
+/// The `namespace` a C# source file declares, if any - the first one, whether
+/// written as a block (`namespace Foo { ... }`) or file-scoped
+/// (`namespace Foo;`).
+///
+/// A generated codec's own namespace and a model's namespace need not match;
+/// this is where `cyclonec` reads the one a model's source declared, to spell
+/// a qualified reference like `Models.Player` when they differ - the C#
+/// counterpart of [`super::go::package_name`].
+pub fn namespace_name(text: &str) -> Option<String> {
+    let tokens = lex(text);
+    let start = tokens
+        .iter()
+        .position(|token| token.kind == Kind::Ident("namespace"))?;
+
+    let mut name = String::new();
+    for token in &tokens[start + 1..] {
+        match token.kind {
+            Kind::Ident(part) => name.push_str(part),
+            Kind::Punct('.') => name.push('.'),
+            _ => break,
+        }
+    }
+
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 // ============================================================== the scanner
@@ -163,7 +205,7 @@ impl<'a> Scanner<'a> {
             let wire_type = arguments
                 .into_iter()
                 .flat_map(split_top_level)
-                .find_map(|argument| string_literal(argument));
+                .find_map(string_literal);
             pending.network = Some(wire_type);
             return Ok(());
         }
@@ -207,8 +249,9 @@ impl<'a> Scanner<'a> {
         }
 
         let model = Model {
-            language: Language::CSharp,
             name: name.to_owned(),
+            source: self.path.to_path_buf(),
+            line: pending.line,
             codecs: dedupe(std::mem::take(&mut pending.codecs)),
             fields: match body {
                 Some(open) => self.members(open)?,
@@ -262,10 +305,10 @@ impl<'a> Scanner<'a> {
                 }
                 DeclarationEnd::Member { name_index } => {
                     let name = self.tokens[name_index].ident().expect("checked by caller");
+                    let line = pending.line;
                     self.skip_member_tail(close);
 
                     if !pending.is_empty() {
-                        let line = pending.line;
                         match pending.network.take() {
                             // §18's C# counterpart - told the field is on the
                             // wire, not told what to write for it.
@@ -279,6 +322,7 @@ impl<'a> Scanner<'a> {
                                 name: name.to_owned(),
                                 network_type,
                                 codecs: dedupe(std::mem::take(&mut pending.codecs)),
+                                line,
                             }),
                             // `[Codec(...)]` with no `[Network(...)]` names a
                             // codec for a field the generator does not know is
@@ -403,7 +447,11 @@ impl<'a> Scanner<'a> {
     }
 
     fn error(&self, line: usize, message: &str) -> Error {
-        Error { path: self.path.to_path_buf(), line, message: message.to_owned() }
+        Error {
+            path: self.path.to_path_buf(),
+            line,
+            message: message.to_owned(),
+        }
     }
 
     /// Steps over a type's base list, generic parameters and constraints.
@@ -463,8 +511,8 @@ enum DeclarationEnd {
     Method,
     /// A field or property, named by the identifier at `name_index`.
     Member { name_index: usize },
-    /// The body ended before a member could be identified - a trailing `[Codec]`
-    /// with nothing after it, or similar debris.
+    /// The body ended before a member could be identified - a trailing
+    /// `[Codec]` with nothing after it, or similar debris.
     EndOfBody,
 }
 
@@ -472,7 +520,10 @@ enum DeclarationEnd {
 /// ignoring surrounding whitespace-equivalent tokens there are none of.
 fn string_literal(tokens: &[Token<'_>]) -> Option<String> {
     match tokens {
-        [Token { kind: Kind::Str(text), .. }] => Some((*text).to_owned()),
+        [Token {
+            kind: Kind::Str(text),
+            ..
+        }] => Some((*text).to_owned()),
         _ => None,
     }
 }
@@ -526,7 +577,10 @@ fn dedupe(mut names: Vec<String>) -> Vec<String> {
 /// and clearing on one of them would drop the very attributes this scanner is
 /// looking for.
 fn is_boundary_keyword(word: &str) -> bool {
-    matches!(word, "namespace" | "using" | "enum" | "interface" | "delegate")
+    matches!(
+        word,
+        "namespace" | "using" | "enum" | "interface" | "delegate"
+    )
 }
 
 // ================================================================= the lexer
@@ -612,7 +666,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
         }
 
         if let Some((text, next, lines)) = string_token(text, at) {
-            tokens.push(Token { kind: Kind::Str(text), line });
+            tokens.push(Token {
+                kind: Kind::Str(text),
+                line,
+            });
             line += lines;
             at = next;
             continue;
@@ -620,7 +677,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
 
         if byte == b'\'' {
             let (next, lines) = char_literal(bytes, at);
-            tokens.push(Token { kind: Kind::Other, line });
+            tokens.push(Token {
+                kind: Kind::Other,
+                line,
+            });
             line += lines;
             at = next;
             continue;
@@ -632,7 +692,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             while at < bytes.len() && is_ident_continue(bytes[at]) {
                 at += 1;
             }
-            tokens.push(Token { kind: Kind::Ident(&text[start..at]), line });
+            tokens.push(Token {
+                kind: Kind::Ident(&text[start..at]),
+                line,
+            });
             continue;
         }
 
@@ -641,7 +704,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             while at < bytes.len() && is_ident_continue(bytes[at]) {
                 at += 1;
             }
-            tokens.push(Token { kind: Kind::Ident(&text[start..at]), line });
+            tokens.push(Token {
+                kind: Kind::Ident(&text[start..at]),
+                line,
+            });
             continue;
         }
 
@@ -652,11 +718,17 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             {
                 at += 1;
             }
-            tokens.push(Token { kind: Kind::Other, line });
+            tokens.push(Token {
+                kind: Kind::Other,
+                line,
+            });
             continue;
         }
 
-        tokens.push(Token { kind: Kind::Punct(byte as char), line });
+        tokens.push(Token {
+            kind: Kind::Punct(byte as char),
+            line,
+        });
         at += 1;
     }
 
@@ -765,4 +837,142 @@ fn is_ident_start(byte: u8) -> bool {
 
 fn is_ident_continue(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{namespace_name, parse};
+
+    fn models(source: &str) -> Vec<crate::model::Model> {
+        parse(Path::new("Test.cs"), source).expect("parse")
+    }
+
+    #[test]
+    fn reads_a_model_its_codecs_and_its_fields() {
+        let models = models(
+            r#"
+            namespace Game.Models;
+
+            [Network]
+            [Codec("edge", "unity")]
+            public class Player
+            {
+                [Network("u32")]
+                [Codec("edge", "unity")]
+                public uint Id { get; set; }
+
+                [Network("f32")]
+                [Codec("edge")]
+                public float X { get; set; }
+
+                // Not on the wire at all.
+                public string Cache { get; set; }
+            }
+            "#,
+        );
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "Player");
+        assert_eq!(models[0].codecs, ["edge", "unity"]);
+        assert_eq!(models[0].fields.len(), 2);
+        assert_eq!(models[0].fields[1].network_type, "f32");
+        assert_eq!(models[0].fields[1].codecs, ["edge"]);
+    }
+
+    #[test]
+    fn a_field_may_be_a_plain_field_not_only_a_property() {
+        let models = models(
+            "[Network][Codec(\"edge\")]\nstruct S {\n    [Network(\"u32\")]\n    [Codec(\"edge\")]\n    public uint id;\n}",
+        );
+        assert_eq!(models[0].fields[0].name, "id");
+    }
+
+    #[test]
+    fn an_unmarked_type_is_not_a_model() {
+        assert!(models("public class Plain { public uint Id; }").is_empty());
+    }
+
+    #[test]
+    fn a_network_field_without_a_type_is_an_error() {
+        let error = parse(
+            Path::new("test.cs"),
+            "[Network]\n[Codec(\"edge\")]\nclass S {\n    [Network]\n    public uint Id { get; set; }\n}",
+        )
+        .expect_err("no network type");
+
+        assert_eq!(error.line, 4);
+        assert!(error.message.contains("requires a wire type"));
+    }
+
+    #[test]
+    fn a_model_in_a_comment_or_a_string_is_not_a_model() {
+        assert!(models("// [Network] class Ghost { }").is_empty());
+        assert!(models("/* [Network]\nclass Ghost { } */").is_empty());
+        assert!(models("const string S = \"[Network] class Ghost { }\";").is_empty());
+    }
+
+    #[test]
+    fn a_composite_network_type_keeps_its_spelling() {
+        let models = models(
+            "[Network][Codec(\"edge\")]\nclass S {\n    [Network(\"Array<u32>\")]\n    [Codec(\"edge\")]\n    public System.Collections.Generic.List<uint> Xs { get; set; }\n}",
+        );
+        assert_eq!(models[0].fields[0].network_type, "Array<u32>");
+    }
+
+    #[test]
+    fn attributes_do_not_leak_past_another_declaration() {
+        let models = models(
+            "[Network]\n[Codec(\"edge\")]\nenum Kind { A }\nclass After { public uint Id; }",
+        );
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn a_model_carries_its_source_and_line() {
+        let models = models("\n\n[Network]\n[Codec(\"edge\")]\nclass Player {}");
+        assert_eq!(models[0].source, Path::new("Test.cs"));
+        assert_eq!(models[0].line, 3);
+    }
+
+    #[test]
+    fn a_method_may_not_carry_network_or_codec() {
+        let error = parse(
+            Path::new("test.cs"),
+            "[Network]\n[Codec(\"edge\")]\nclass S {\n    [Network(\"u32\")]\n    public uint GetId() => 0;\n}",
+        )
+        .expect_err("not a field");
+        assert!(error.message.contains("not on a field or property"));
+    }
+
+    #[test]
+    fn a_property_with_an_initializer_is_still_read_correctly() {
+        let models = models(
+            "[Network][Codec(\"edge\")]\nclass S {\n    [Network(\"u32\")]\n    [Codec(\"edge\")]\n    public uint Id { get; set; } = 7;\n\n    [Network(\"string\")]\n    [Codec(\"edge\")]\n    public string Name { get; set; }\n}",
+        );
+        assert_eq!(models[0].fields.len(), 2);
+        assert_eq!(models[0].fields[1].name, "Name");
+    }
+
+    #[test]
+    fn the_namespace_is_read_for_import_qualification() {
+        assert_eq!(
+            namespace_name("namespace Game.Models;\n\nclass X {}\n"),
+            Some("Game.Models".to_owned())
+        );
+        assert_eq!(
+            namespace_name("namespace Game.Models\n{\n    class X {}\n}\n"),
+            Some("Game.Models".to_owned())
+        );
+        assert_eq!(namespace_name("class X {}\n"), None);
+    }
+
+    #[test]
+    fn a_qualified_attribute_name_is_still_recognised() {
+        let models = models(
+            "[Cyclone.Network(\"u32\")]\n[Cyclone.Codec(\"edge\")]\nclass S {\n    [Cyclone.Network(\"u32\")]\n    [Cyclone.Codec(\"edge\")]\n    public uint Id { get; set; }\n}",
+        );
+        assert_eq!(models[0].fields[0].network_type, "u32");
+    }
 }

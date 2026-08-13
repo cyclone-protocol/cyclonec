@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "generator": "cyclonec 0.2.0",
+  "schema_fingerprint": "sha256:6d1b58906fa09ffa831b29a1fd0dbd42c725385554b2f193dafed9c252976059",
+  "sha256_of": "each file with its `// generated-at:` line emptied, so an unchanged schema keeps an unchanged digest",
+  "sources": {
+    "tests/fixtures/schema/device_state.rs": {
+      "models": [
+        "DeviceState",
+        "Telemetry"
+      ],
+      "outputs": [
+        {
+          "path": "tests/fixtures/generated/device_state_edge.rs",
+          "model": "DeviceState",
+          "codec": "edge",
+          "fingerprint": "sha256:abd1e9ad26cb27552078ba8ef3c7ac2229d94b2004fe699b945f5d2980f49cab",
+          "sha256": "1925292d83b15218ba3ec07784a83918d8d27a18f2d5997c49957cc7cd793913"
+        },
+        {
+          "path": "tests/fixtures/generated/device_state_unity.rs",
+          "model": "DeviceState",
+          "codec": "unity",
+          "fingerprint": "sha256:a48e6b15be605bb9d6bd0d1ed1af8c5d588976e5635e1a437bf16409f1a48453",
+          "sha256": "8220fc89f7d628e5c2457ea6d9b609296796a395f1991097a5d2f97bb5ab3557"
+        },
+        {
+          "path": "tests/fixtures/generated/telemetry_edge.rs",
+          "model": "Telemetry",
+          "codec": "edge",
+          "fingerprint": "sha256:b684bfc5812407dcf11859552a4ffe8b52d22a02f2eaee118d896f49406e18c8",
+          "sha256": "048927ade291c68f05d86b95388e3531166ab0f9bfd4276065db3cd9c0d8e231"
+        },
+        {
+          "path": "tests/fixtures/generated/telemetry_orange_pi.rs",
+          "model": "Telemetry",
+          "codec": "orange_pi",
+          "fingerprint": "sha256:3ad024b5ba58d05af96949fa27f119da9db642189aae2dfd671e3eff51ded262",
+          "sha256": "451c5f08a21a5cee92eac447f4f2a0c8ab2479bd5e41742b87345835a246829d"
+        }
+      ]
+    },
+    "tests/fixtures/schema/every_primitive.rs": {
+      "models": [
+        "EveryPrimitive"
+      ],
+      "outputs": [
+        {
+          "path": "tests/fixtures/generated/every_primitive_edge.rs",
+          "model": "EveryPrimitive",
+          "codec": "edge",
+          "fingerprint": "sha256:8fd59d536dd8a425b252e4c8bebce752ae46b7f64925621dcfc14424c9e63302",
+          "sha256": "5a2a142776ffb7b2d0db82831c0df14ae99cc540c6b2f4b0a7237d81cbb41d4a"
+        }
+      ]
+    },
+    "tests/fixtures/schema/player.rs": {
+      "models": [
+        "Player",
+        "PlayerInfo",
+        "Team"
+      ],
+      "outputs": [
+        {
+          "path": "tests/fixtures/generated/player_edge.rs",
+          "model": "Player",
+          "codec": "edge",
+          "fingerprint": "sha256:231dd2d8744fecc3198c9853ffafe18023c93670fe7822c4cd9638fe9eabbe8b",
+          "sha256": "81db5bcfd376f5077b64424698f061875bc67d72bbe38d5cb277483a0d207b89"
+        },
+        {
+          "path": "tests/fixtures/generated/player_info_edge.rs",
+          "model": "PlayerInfo",
+          "codec": "edge",
+          "fingerprint": "sha256:81962b09e3bcca4d6f5e160195d3fbe7d5af9e174ddb386474bd0c04284a5647",
+          "sha256": "a35d5c8292a57bc63660ee99a0e6ff6cf5331ee4346b1d6e9bc0f70453db75c7"
+        },
+        {
+          "path": "tests/fixtures/generated/team_edge.rs",
+          "model": "Team",
+          "codec": "edge",
+          "fingerprint": "sha256:1b0bfc430d3291ddab719ab1a90b554508e515a3f5018a01f87b84734d477384",
+          "sha256": "79d211e85c0b93afb18b16beee2250a15e6843bb96bc807cc326b7f0c144108c"
+        }
+      ]
+    }
+  },
+  "shared": [
+    {
+      "path": "tests/fixtures/generated/runtime.rs",
+      "kind": "runtime",
+      "sha256": "34ddad6b061877598e825de88146a7db09a7cb16aaf64246ffddb0c044ac8e64"
+    },
+    {
+      "path": "tests/fixtures/generated/handshake.rs",
+      "kind": "handshake",
+      "sha256": "43d919a6d5d4416cbb87909876567b1fadb0f73e6645b22e85e0ca0c1bd85760"
+    },
+    {
+      "path": "tests/fixtures/generated/mod.rs",
+      "kind": "root",
+      "sha256": "ea531e1b75e8eba0f21e6b974fb32a8f6deb21f8a89f991bc74bbc2cf17efe3d"
+    }
+  ]
+}

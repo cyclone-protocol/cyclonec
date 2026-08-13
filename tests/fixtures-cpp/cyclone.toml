@@ -1,0 +1,10 @@
+# The fixture project, laid out the way a real C++ project is: `src/` holds
+# the annotated models, and the generated tree lands beside it at
+# `src/generated/` - the C++ counterpart of tests/fixtures-cs/cyclone.toml.
+src = "src"
+out = "src/generated"
+
+# No model_path: the fixture's one namespace (`models`) is read straight off
+# the source, and the #include path a generated header needs is always the
+# model's own source path regardless of this option - see
+# generator::cpp::ModelLocation's module docs.

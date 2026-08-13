@@ -1,30 +1,43 @@
-//! End-to-end: the generated file is compiled and run.
+//! End to end: the generated tree is compiled and run.
 //!
-//! A generator that emits plausible-looking source proves nothing. This includes
-//! the committed `tests/fixtures/cyclone.codec.rs` into a real crate and runs
-//! it, so everything asserted below is code `rustc` accepted.
+//! A generator that emits plausible-looking source proves nothing. This
+//! includes the committed `tests/fixtures/generated/` into a real crate and
+//! runs it, so everything asserted below is code `rustc` accepted and bytes a
+//! user would actually put on the wire.
 //!
-//! There is no stub and no import. The generated file carries the runtime -
-//! `Writer`, `Reader`, `DecodeError`, `Limits` - so the bytes checked here are
-//! the bytes a user would put on the wire, compared against RFC-0002.
+//! There is no stub and no import: the generated tree carries the runtime.
+//! Every byte expectation is read off RFC-0002, and the decode-semantics tests
+//! are §9.1 line by line.
 
-// The generated file defines the runtime as `pub`, and these tests do not call
-// every method of it.
+// The generated runtime is `pub` and these tests do not call all of it.
 #![allow(dead_code)]
 
-// The models a user would write, and the one file `cyclonec` wrote for them.
-include!("fixtures/device_state.rs");
-include!("fixtures/cyclone.codec.rs");
+// The models a user would write, and the tree `cyclonec` wrote for them.
+// Mounted the way a user mounts them: the models the user annotated, and the
+// tree generated from them. The generated codecs reach the models at
+// `crate::models::player::Player` - the same types, not copies of them, at the
+// path the fixture's own layout implies.
+// Through a macro, for one reason: `cargo fmt` follows a `mod` declaration into
+// the file it names, and reformatting the committed generated tree would leave
+// it disagreeing with what `cyclonec` writes - a permanent, self-inflicted
+// "stale" that no amount of regenerating fixes. rustfmt works on the AST before
+// expansion, so it cannot see these; the compiler expands them into two
+// ordinary modules and nothing else about the test changes.
+macro_rules! mount_the_generated_tree {
+    () => {
+        #[path = "fixtures/src/models/mod.rs"]
+        mod models;
 
-fn sample() -> DeviceState {
-    DeviceState {
-        id: 42,
-        temperature: 21.5,
-        display_name: "sensor-1".to_owned(),
-        unrouted: 7,
-        cache: "local".to_owned(),
-    }
+        #[path = "fixtures/src/generated/mod.rs"]
+        mod generated;
+    };
 }
+mount_the_generated_tree!();
+
+use generated::*;
+use models::device_state::*;
+use models::every_primitive::*;
+use models::player::*;
 
 fn encode<T>(value: &T, encode: fn(&mut Writer, &T)) -> Vec<u8> {
     let mut writer = Writer::new();
@@ -32,334 +45,458 @@ fn encode<T>(value: &T, encode: fn(&mut Writer, &T)) -> Vec<u8> {
     writer.into_bytes()
 }
 
-// ================================================== §15 - one model, two codecs
+fn player() -> Player {
+    Player {
+        id: 100,
+        x: 10.5,
+        y: 20.0,
+    }
+}
 
-/// h.md §15 - `EdgeCodec` carries `id` and `temperature`, `UnityCodec` carries
-/// `id` and `display_name`, each in declaration order. These are the bytes.
+// ==================================================== the bytes, against RFC-0002
+
+/// The vector every SDK is checked against: Little Endian, no padding, no
+/// metadata, fields in declaration order.
 #[test]
-fn each_codec_writes_the_fields_that_named_it() {
+fn a_model_is_its_fields_back_to_back_little_endian() {
     assert_eq!(
-        encode(&sample(), DeviceStateEdgeCodec::encode),
+        encode(&player(), PlayerEdgeCodec::encode),
         [
-            0x2A, 0x00, 0x00, 0x00, // id = 42, u32 Little Endian
-            0x00, 0x00, 0xAC, 0x41, // temperature = 21.5, raw IEEE 754 bits
+            0x64, 0x00, 0x00, 0x00, // id = 100, u32 LE
+            0x00, 0x00, 0x28, 0x41, // x = 10.5, raw IEEE 754 bits
+            0x00, 0x00, 0xA0, 0x41, // y = 20.0
         ]
     );
+}
+
+/// One model, two codecs: each writes the fields that named it, and nothing
+/// else - including the field that named neither.
+#[test]
+fn each_codec_writes_the_fields_that_named_it() {
+    let state = DeviceState {
+        id: 42,
+        temperature: 21.5,
+        display_name: "sensor-1".to_owned(),
+        unrouted: 7,
+        cache: "local".to_owned(),
+    };
 
     assert_eq!(
-        encode(&sample(), DeviceStateUnityCodec::encode),
+        encode(&state, DeviceStateEdgeCodec::encode),
+        [0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0xAC, 0x41]
+    );
+    assert_eq!(
+        encode(&state, DeviceStateUnityCodec::encode),
         [
             0x2A, 0x00, 0x00, 0x00, // id = 42
-            0x08, 0x00, 0x00, 0x00, // "sensor-1" - a length in bytes
+            0x08, 0x00, 0x00, 0x00, // "sensor-1", a length in bytes
             0x73, 0x65, 0x6E, 0x73, 0x6F, 0x72, 0x2D, 0x31,
         ]
     );
 }
 
-/// Each codec round-trips the fields it carries.
+/// A `string` length counts **bytes**, not characters (RFC-0002 §3).
 #[test]
-fn each_codec_round_trips() {
-    let bytes = encode(&sample(), DeviceStateEdgeCodec::encode);
-    let mut value = DeviceState::default();
-    let mut reader = Reader::new(&bytes);
+fn a_string_length_counts_bytes() {
+    let state = DeviceState {
+        display_name: "héllo".to_owned(),
+        ..DeviceState::default()
+    };
+    let bytes = encode(&state, DeviceStateUnityCodec::encode);
 
-    DeviceStateEdgeCodec::decode(&mut reader, &mut value).expect("decode");
+    assert_eq!(&bytes[4..8], [0x06, 0x00, 0x00, 0x00]);
+    assert_eq!(bytes.len(), 4 + 4 + 6);
+}
 
-    assert_eq!(value.id, 42);
-    assert_eq!(value.temperature, 21.5);
-    assert!(reader.is_empty(), "the cursor lands exactly at the end");
+/// Float bits are written unmodified: `-0.0` keeps its sign and a `NaN`
+/// payload survives (RFC-0002 §2.3).
+#[test]
+fn float_bit_patterns_survive() {
+    let negative_zero = Player {
+        id: 0,
+        x: -0.0,
+        y: 0.0,
+    };
+    let bytes = encode(&negative_zero, PlayerEdgeCodec::encode);
+    assert_eq!(&bytes[4..8], [0x00, 0x00, 0x00, 0x80]);
+
+    let mut round_tripped = Player::default();
+    PlayerEdgeCodec::decode(&mut Reader::new(&bytes), &mut round_tripped).expect("decode");
+    assert!(round_tripped.x.is_sign_negative());
+}
+
+/// Every primitive, in one message, at its RFC-0002 size.
+#[test]
+fn every_primitive_is_its_specified_width() {
+    let value = EveryPrimitive {
+        flag: true,
+        tiny: -2,
+        byte: 0xFF,
+        small: -300,
+        port: 8080,
+        offset: -1,
+        count: 4_294_967_295,
+        delta: -2,
+        sequence: 1,
+        ratio: 1.0,
+        precise: 2.0,
+        label: "ok".to_owned(),
+        blob: vec![0xDE, 0xAD],
+    };
+
+    assert_eq!(
+        encode(&value, EveryPrimitiveEdgeCodec::encode),
+        [
+            0x01, // flag
+            0xFE, // tiny = -2
+            0xFF, // byte
+            0xD4, 0xFE, // small = -300
+            0x90, 0x1F, // port = 8080
+            0xFF, 0xFF, 0xFF, 0xFF, // offset = -1
+            0xFF, 0xFF, 0xFF, 0xFF, // count = u32::MAX
+            0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // delta = -2
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sequence = 1
+            0x00, 0x00, 0x80, 0x3F, // ratio = 1.0
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, // precise = 2.0
+            0x02, 0x00, 0x00, 0x00, 0x6F, 0x6B, // "ok"
+            0x02, 0x00, 0x00, 0x00, 0xDE, 0xAD, // blob
+        ]
+    );
+
+    let bytes = encode(&value, EveryPrimitiveEdgeCodec::encode);
+    let mut back = EveryPrimitive::default();
+    EveryPrimitiveEdgeCodec::decode(&mut Reader::new(&bytes), &mut back).expect("decode");
+    assert_eq!(back, value);
+}
+
+/// A nested model is its fields inline - no header, no length, no tag.
+#[test]
+fn a_nested_model_is_inline() {
+    let team = Team {
+        captain: PlayerInfo { level: 9 },
+        tags: vec!["a".to_owned()],
+        scores: vec![7],
+        roster: vec![PlayerInfo { level: 1 }, PlayerInfo { level: 2 }],
+    };
+
+    assert_eq!(
+        encode(&team, TeamEdgeCodec::encode),
+        [
+            0x09, 0x00, 0x00, 0x00, // captain.level = 9
+            0x01, 0x00, 0x00, 0x00, // tags: 1 element
+            0x01, 0x00, 0x00, 0x00, 0x61, // "a"
+            0x01, 0x00, 0x00, 0x00, // scores: 1 element
+            0x07, 0x00, 0x00, 0x00, // 7
+            0x02, 0x00, 0x00, 0x00, // roster: 2 elements
+            0x01, 0x00, 0x00, 0x00, // roster[0].level
+            0x02, 0x00, 0x00, 0x00, // roster[1].level
+        ]
+    );
+}
+
+#[test]
+fn composites_round_trip() {
+    let team = Team {
+        captain: PlayerInfo { level: 9 },
+        tags: vec!["a".to_owned(), "bb".to_owned()],
+        scores: vec![1, 2, 3],
+        roster: vec![PlayerInfo { level: 4 }],
+    };
+
+    let bytes = encode(&team, TeamEdgeCodec::encode);
+    let mut back = Team::default();
+    TeamEdgeCodec::decode(&mut Reader::new(&bytes), &mut back).expect("decode");
+    assert_eq!(back, team);
 }
 
 /// A codec leaves the fields it does not carry exactly as they were, which is
 /// what lets one model be split across several of them.
 #[test]
-fn decode_leaves_fields_it_does_not_carry_alone() {
-    let bytes = encode(&sample(), DeviceStateEdgeCodec::encode);
-    let mut value = DeviceState { id: 0, temperature: 0.0, ..sample() };
+fn decode_leaves_fields_the_codec_does_not_carry() {
+    let bytes = encode(
+        &DeviceState {
+            id: 42,
+            temperature: 21.5,
+            ..DeviceState::default()
+        },
+        DeviceStateEdgeCodec::encode,
+    );
 
+    let mut value = DeviceState {
+        display_name: "kept".to_owned(),
+        unrouted: 7,
+        cache: "kept".to_owned(),
+        ..DeviceState::default()
+    };
     DeviceStateEdgeCodec::decode(&mut Reader::new(&bytes), &mut value).expect("decode");
 
-    // `edge` carries these two.
     assert_eq!(value.id, 42);
-    assert_eq!(value.temperature, 21.5);
-
-    // It carries none of these, so none of them moved.
-    assert_eq!(value.display_name, "sensor-1");
+    assert_eq!(value.display_name, "kept");
     assert_eq!(value.unrouted, 7);
-    assert_eq!(value.cache, "local");
 }
 
-/// Both codecs applied in turn rebuild every routed field, and only those.
+// ================================================ decode semantics - RFC-0002 §9.1
+
+/// **Trailing bytes.** A new writer appended a field; an old reader reads what
+/// it knows and ignores the rest. Not an error.
 #[test]
-fn two_codecs_together_cover_the_routed_fields() {
-    let edge = encode(&sample(), DeviceStateEdgeCodec::encode);
-    let unity = encode(&sample(), DeviceStateUnityCodec::encode);
-
-    let mut value = DeviceState::default();
-    DeviceStateEdgeCodec::decode(&mut Reader::new(&edge), &mut value).expect("decode");
-    DeviceStateUnityCodec::decode(&mut Reader::new(&unity), &mut value).expect("decode");
-
-    assert_eq!(value.id, 42);
-    assert_eq!(value.temperature, 21.5);
-    assert_eq!(value.display_name, "sensor-1");
-
-    // A field in no codec, and a field with no `#[network]`, are on no wire.
-    assert_eq!(value.unrouted, 0);
-    assert_eq!(value.cache, "");
-}
-
-// ========================================================== §16 - codec names
-
-/// h.md §16 - every identifier is a codec name, and the four types exist.
-#[test]
-fn unknown_codec_names_become_generated_types() {
-    let value = Telemetry { sequence: 9 };
-    let expected = [0x09, 0, 0, 0, 0, 0, 0, 0];
-
-    assert_eq!(encode(&value, TelemetryEdgeCodec::encode), expected);
-    assert_eq!(encode(&value, TelemetryOrangePiCodec::encode), expected);
-    assert_eq!(encode(&value, TelemetryUnityCodec::encode), expected);
-    assert_eq!(encode(&value, TelemetryCustomACodec::encode), expected);
-}
-
-// ======================================================= §8 - composite model
-
-/// h.md §8 - a model-typed field becomes a call to that model's codec, inlined:
-/// no length, no delimiter, no header.
-#[test]
-fn a_model_field_is_inlined() {
-    let value = Player { hp: 100, speed: 1.5, info: PlayerInfo { level: 3 } };
-
-    let bytes = encode(&value, PlayerEdgeCodec::encode);
-    assert_eq!(
-        bytes,
-        [
-            0x64, 0x00, 0x00, 0x00, // hp = 100
-            0x00, 0x00, 0xC0, 0x3F, // speed = 1.5
-            0x03, 0x00, 0x00, 0x00, // info.level = 3, inlined
-        ]
-    );
+fn trailing_bytes_are_ignored() {
+    let mut bytes = encode(&player(), PlayerEdgeCodec::encode);
+    bytes.extend_from_slice(&[0x2A, 0x00, 0x00, 0x00]); // a `level: u32` we never heard of
 
     let mut value = Player::default();
     let mut reader = Reader::new(&bytes);
-    PlayerEdgeCodec::decode(&mut reader, &mut value).expect("decode");
+    PlayerEdgeCodec::decode(&mut reader, &mut value).expect("trailing bytes are not an error");
 
-    assert_eq!(value.hp, 100);
-    assert_eq!(value.info.level, 3);
-    assert!(reader.is_empty());
+    assert_eq!(value, player());
+    assert_eq!(reader.remaining(), 4, "the extra field is left unread");
 }
 
-// ========================================================== §6 - Array<T>
-
-/// §6 - `Array<T>` is a `UInt32` count followed by that many elements, no
-/// per-element length prefix. Covers a scalar, a string, and a nested model as
-/// element types in one codec. This exact byte sequence is also asserted, from
-/// their own generated code, in `tests/csharp/GeneratedTests.cs`,
-/// `tests/fixtures/cyclone_generated_test.go`, and by a real Godot run over
-/// `tests/fixtures/gdscript/team.gd` - four languages, one wire format.
-fn team_golden_bytes() -> [u8; 48] {
-    [
-        0x03, 0x00, 0x00, 0x00, // scores.len() = 3
-        0x0A, 0x00, 0x00, 0x00, // scores[0] = 10
-        0x14, 0x00, 0x00, 0x00, // scores[1] = 20
-        0x1E, 0x00, 0x00, 0x00, // scores[2] = 30
-        0x02, 0x00, 0x00, 0x00, // names.len() = 2
-        0x05, 0x00, 0x00, 0x00, b'a', b'l', b'i', b'c', b'e', // names[0]
-        0x03, 0x00, 0x00, 0x00, b'b', b'o', b'b', // names[1]
-        0x02, 0x00, 0x00, 0x00, // players.len() = 2
-        0x03, 0x00, 0x00, 0x00, // players[0].level = 3, inlined
-        0x07, 0x00, 0x00, 0x00, // players[1].level = 7, inlined
-    ]
-}
-
-fn team_sample() -> Team {
-    Team {
-        scores: vec![10, 20, 30],
-        names: vec!["alice".to_owned(), "bob".to_owned()],
-        players: vec![PlayerInfo { level: 3 }, PlayerInfo { level: 7 }],
-    }
-}
-
+/// **A missing field.** An old writer stopped early; the reader's remaining
+/// fields are absent and take their zero value.
 #[test]
-fn array_of_scalar_string_and_model_matches_the_golden_bytes() {
-    assert_eq!(encode(&team_sample(), TeamEdgeCodec::encode), team_golden_bytes());
+fn a_field_the_stream_ended_before_is_zero() {
+    // Only `id` and `x` were written - `y` never arrived at all.
+    let bytes = encode(&player(), PlayerEdgeCodec::encode)[..8].to_vec();
+
+    let mut value = Player {
+        id: 1,
+        x: 1.0,
+        y: 999.0,
+    };
+    PlayerEdgeCodec::decode(&mut Reader::new(&bytes), &mut value).expect("version skew is valid");
+
+    assert_eq!(value.id, 100);
+    assert_eq!(value.x, 10.5);
+    assert_eq!(
+        value.y, 0.0,
+        "an absent field is zero, not what was there before"
+    );
 }
 
+/// Every field absent - an empty payload is a valid message of zeroes.
 #[test]
-fn array_round_trips_including_nested_model_elements() {
-    let bytes = encode(&team_sample(), TeamEdgeCodec::encode);
-    let mut value = Team::default();
-    let mut reader = Reader::new(&bytes);
-
-    TeamEdgeCodec::decode(&mut reader, &mut value).expect("decode");
-
-    assert_eq!(value, team_sample());
-    assert!(reader.is_empty(), "the cursor lands exactly at the end");
+fn an_empty_payload_zeroes_every_field() {
+    let mut value = player();
+    PlayerEdgeCodec::decode(&mut Reader::new(&[]), &mut value).expect("all absent");
+    assert_eq!(value, Player::default());
 }
 
-/// An empty `Array<T>` is just its `UInt32` count of zero - no elements, and
-/// decoding it leaves the field an empty `Vec`, not untouched.
+/// **A partial field.** The stream ended *inside* `y`, which is a truncated
+/// packet, not version skew. It must not decode to zero.
 #[test]
-fn an_empty_array_is_just_its_zero_count() {
-    let bytes = encode(&Team::default(), TeamEdgeCodec::encode);
-    assert_eq!(bytes, [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+fn a_field_the_stream_ended_inside_is_an_error() {
+    let bytes = encode(&player(), PlayerEdgeCodec::encode)[..10].to_vec(); // 2 of y's 4 bytes
 
-    let mut value = Team { scores: vec![1], ..Team::default() };
-    TeamEdgeCodec::decode(&mut Reader::new(&bytes), &mut value).expect("decode");
-    assert!(value.scores.is_empty());
+    let mut value = Player::default();
+    let error = PlayerEdgeCodec::decode(&mut Reader::new(&bytes), &mut value)
+        .expect_err("a truncated field is corruption");
+
+    assert_eq!(
+        error,
+        DecodeError::UnexpectedEof {
+            needed: 4,
+            remaining: 2
+        }
+    );
 }
 
-/// `Limits::max_array_count` is checked before an element is allocated, the
-/// same guard `max_string_length` and `max_bytes_length` already give scalar
-/// fields - a forged huge count cannot force an unbounded allocation.
+/// The distinction the whole of §9.1 turns on, stated as one test: the same
+/// field, absent, and the same field, truncated.
 #[test]
-fn an_array_count_over_the_limit_is_rejected_before_allocating() {
-    let mut writer = Writer::new();
-    writer.write_array_count(5);
+fn absent_and_truncated_are_not_the_same_thing() {
+    let full = encode(&player(), PlayerEdgeCodec::encode);
 
-    let limits = Limits { max_array_count: 2, ..Limits::UNLIMITED };
-    let bytes = writer.into_bytes();
-    let mut reader = Reader::with_limits(bytes.as_slice(), limits);
+    let mut absent = Player::default();
+    assert!(PlayerEdgeCodec::decode(&mut Reader::new(&full[..8]), &mut absent).is_ok());
 
-    assert!(reader.read_array_count().is_err());
+    let mut truncated = Player::default();
+    assert!(PlayerEdgeCodec::decode(&mut Reader::new(&full[..9]), &mut truncated).is_err());
 }
 
-// ============================================================ §4 - primitives
-
-/// h.md §4 - each network type maps to the runtime method RFC-0002 defines, and
-/// these are the bytes that method writes.
+/// A nested model follows the same rule at its own level.
 #[test]
-fn every_primitive_matches_the_specification() {
-    let value = EveryPrimitive {
-        flag: true,
-        a: -1,
-        b: 255,
-        c: -1,
-        d: 300,
-        e: -1,
-        f: 0x1234_5678,
-        g: -1,
-        h: 1,
-        i: 1.5,
-        j: 1.0,
-        k: "中".to_owned(),
-        l: vec![0xFF, 0xFE],
+fn a_nested_model_skews_at_its_own_level() {
+    let mut value = Team {
+        captain: PlayerInfo { level: 5 },
+        tags: vec!["stale".to_owned()],
+        scores: vec![1],
+        roster: vec![PlayerInfo { level: 1 }],
     };
 
-    assert_eq!(
-        encode(&value, EveryPrimitiveAllCodec::encode),
-        [
-            0x01, // bool
-            0xFF, // i8 -1
-            0xFF, // u8 255
-            0xFF, 0xFF, // i16 -1
-            0x2C, 0x01, // u16 300
-            0xFF, 0xFF, 0xFF, 0xFF, // i32 -1
-            0x78, 0x56, 0x34, 0x12, // u32 0x12345678 - the endianness vector
-            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // i64 -1
-            0x01, 0, 0, 0, 0, 0, 0, 0, // u64 1
-            0x00, 0x00, 0xC0, 0x3F, // f32 1.5
-            0, 0, 0, 0, 0, 0, 0xF0, 0x3F, // f64 1.0
-            0x03, 0, 0, 0, 0xE4, 0xB8, 0xAD, // string "中" - 3 bytes, not 1 char
-            0x02, 0, 0, 0, 0xFF, 0xFE, // bytes
-        ]
-    );
+    // Only the captain arrived.
+    TeamEdgeCodec::decode(&mut Reader::new(&[0x09, 0x00, 0x00, 0x00]), &mut value)
+        .expect("version skew");
+
+    assert_eq!(value.captain.level, 9);
+    assert!(value.tags.is_empty(), "an absent array is empty, not stale");
+    assert!(value.scores.is_empty());
+    assert!(value.roster.is_empty());
 }
 
-// =============================================== the runtime the file carries
-
-/// The generated file carries a conforming decoder, not a permissive one.
+/// An array element is **not** version skew: the count promised it.
 #[test]
-fn the_embedded_runtime_rejects_malformed_input() {
+fn a_truncated_array_is_an_error_not_an_empty_tail() {
+    let bytes = [
+        0x00, 0x00, 0x00, 0x00, // captain.level
+        0x02, 0x00, 0x00, 0x00, // tags: 2 elements promised
+        0x01, 0x00, 0x00, 0x00, 0x61, // "a" - and then nothing
+    ];
+
+    let mut value = Team::default();
+    assert!(TeamEdgeCodec::decode(&mut Reader::new(&bytes), &mut value).is_err());
+}
+
+// ==================================================== invalid streams - RFC-0002 §10
+
+#[test]
+fn an_invalid_bool_is_rejected() {
+    let mut value = EveryPrimitive::default();
+    let error = EveryPrimitiveEdgeCodec::decode(&mut Reader::new(&[0x02]), &mut value)
+        .expect_err("0x02 is neither 0x00 nor 0x01");
+    assert_eq!(error, DecodeError::InvalidBool(0x02));
+}
+
+#[test]
+fn invalid_utf8_in_a_string_is_rejected() {
+    let bytes = [
+        0x2A, 0x00, 0x00, 0x00, // id
+        0x01, 0x00, 0x00, 0x00, 0xFF, // a one-byte "string" that is not UTF-8
+    ];
     let mut value = DeviceState::default();
-
-    // A bool is 0x00 or 0x01 and nothing else - "non-zero means true" is not
-    // permitted (RFC-0002 §3).
-    assert_eq!(Reader::new(&[0x02]).read_bool(), Err(DecodeError::InvalidBool(0x02)));
-
-    // Fewer bytes than the value requires.
-    assert_eq!(
-        DeviceStateEdgeCodec::decode(&mut Reader::new(&[0x2A, 0x00, 0x00]), &mut value),
-        Err(DecodeError::UnexpectedEof { needed: 4, remaining: 3 })
-    );
-
-    // A string region that is not valid UTF-8.
-    let bytes = [0x2A, 0, 0, 0, 0x02, 0, 0, 0, 0xFF, 0xFE];
     assert_eq!(
         DeviceStateUnityCodec::decode(&mut Reader::new(&bytes), &mut value),
         Err(DecodeError::InvalidUtf8)
     );
 }
 
-/// `Limits` reaches the generated code unchanged, so a caller can bound what an
-/// untrusted stream may allocate.
+/// A length longer than the bytes that remain is invalid, whatever the limits
+/// say (RFC-0002 §10.1) - and it is checked before anything is allocated.
 #[test]
-fn the_embedded_limits_apply_to_generated_decode() {
-    let mut bytes = vec![0x2A, 0, 0, 0, 0x10, 0, 0, 0];
-    bytes.extend_from_slice(b"0123456789abcdef");
-
-    let limits = Limits { max_string_len: 8, ..Limits::UNLIMITED };
+fn a_length_past_the_end_is_rejected_before_allocating() {
+    let bytes = [
+        0x2A, 0x00, 0x00, 0x00, // id
+        0xFF, 0xFF, 0xFF, 0xFF, // a string of 4 GiB
+    ];
     let mut value = DeviceState::default();
+    assert!(DeviceStateUnityCodec::decode(&mut Reader::new(&bytes), &mut value).is_err());
+}
 
+/// Configured limits are additive, and rejecting on one is not an error the
+/// wire format defines (RFC-0002 §12).
+#[test]
+fn a_configured_limit_rejects_a_length_the_stream_could_satisfy() {
+    let bytes = encode(
+        &DeviceState {
+            display_name: "sensor-1".to_owned(),
+            ..DeviceState::default()
+        },
+        DeviceStateUnityCodec::encode,
+    );
+
+    let limits = Limits {
+        max_string_len: 4,
+        ..Limits::UNLIMITED
+    };
+    let mut value = DeviceState::default();
     assert_eq!(
         DeviceStateUnityCodec::decode(&mut Reader::with_limits(&bytes, limits), &mut value),
-        Err(DecodeError::LengthOverflow { length: 16, limit: 8 })
+        Err(DecodeError::LengthOverflow {
+            length: 8,
+            limit: 4
+        })
     );
-
-    // The default is permissive: the same bytes decode fine.
-    let mut value = DeviceState::default();
-    DeviceStateUnityCodec::decode(&mut Reader::new(&bytes), &mut value).expect("decode");
-    assert_eq!(value.display_name, "0123456789abcdef");
 }
 
-/// Floats are written as raw bits: `-0.0` stays distinct from `0.0`, and nothing
-/// is canonicalized.
+// ============================================================ the fingerprints
+
+/// The constants on a codec and the constants in `handshake.rs` are the same
+/// values, generated once from one schema.
 #[test]
-fn floats_keep_their_bits() {
-    let negative = encode(
-        &DeviceState { temperature: -0.0, ..DeviceState::default() },
-        DeviceStateEdgeCodec::encode,
-    );
-    let positive = encode(
-        &DeviceState { temperature: 0.0, ..DeviceState::default() },
-        DeviceStateEdgeCodec::encode,
-    );
-
-    assert_ne!(negative, positive);
-
-    let mut value = DeviceState::default();
-    DeviceStateEdgeCodec::decode(&mut Reader::new(&negative), &mut value).expect("decode");
-    assert!(value.temperature.is_sign_negative());
+fn a_codec_and_the_handshake_agree() {
+    assert_eq!(PlayerEdgeCodec::FINGERPRINT, PLAYER_EDGE_FINGERPRINT);
+    assert_eq!(PlayerEdgeCodec::MESSAGE_ID, PLAYER_EDGE_MESSAGE_ID);
+    assert_eq!(PlayerEdgeCodec::MESSAGE_NAME, "Player.edge");
+    assert_eq!(TeamEdgeCodec::FINGERPRINT, TEAM_EDGE_FINGERPRINT);
 }
 
-// ================================================================ edge cases
-
-/// §15 - a declared codec is generated even when no field joined it.
+/// Two codecs of one model are two wire contracts, and two fingerprints.
 #[test]
-fn a_codec_no_field_joined_is_still_generated() {
-    let bytes = encode(&NoFieldsJoined { id: 1 }, NoFieldsJoinedLonelyCodec::encode);
-    assert!(bytes.is_empty(), "a model with no routed field occupies zero bytes");
-
-    let mut value = NoFieldsJoined::default();
-    NoFieldsJoinedLonelyCodec::decode(&mut Reader::new(&[]), &mut value).expect("decode");
+fn each_codec_has_its_own_fingerprint() {
+    assert_ne!(
+        DEVICE_STATE_EDGE_FINGERPRINT,
+        DEVICE_STATE_UNITY_FINGERPRINT
+    );
+    assert_ne!(DEVICE_STATE_EDGE_MESSAGE_ID, DEVICE_STATE_UNITY_MESSAGE_ID);
 }
 
-/// A struct nothing marks is not a model, and its neighbours are unaffected.
 #[test]
-fn an_unmarked_struct_does_not_disturb_the_next_model() {
-    let _ = NotAModel { whatever: 1 };
+fn the_message_table_holds_every_message() {
+    assert_eq!(CYCLONE_MESSAGES.len(), 8);
+    for message in CYCLONE_MESSAGES {
+        assert_eq!(cyclone_message(message.id), Some(message));
+    }
+    assert_eq!(cyclone_message(0), None);
+}
+
+// =============================================================== the handshake
+
+#[test]
+fn handshake_current() {
+    let peer: Vec<(u32, u64)> = CYCLONE_MESSAGES
+        .iter()
+        .map(|message| (message.id, message.fingerprint))
+        .collect();
 
     assert_eq!(
-        encode(&AfterTheUnmarkedStruct { value: 5 }, AfterTheUnmarkedStructEdgeCodec::encode),
-        [0x05, 0x00, 0x00, 0x00]
+        cyclone_handshake(CYCLONE_SCHEMA_FINGERPRINT, &peer),
+        CycloneHandshake::Current
     );
 }
 
-/// Encoding the same value twice produces the same bytes.
+/// A peer on an older schema: it knows fewer messages, and every message both
+/// ends know is byte-identical. Safe to talk.
 #[test]
-fn encoding_is_deterministic() {
+fn handshake_outdated() {
+    let peer = [(PLAYER_EDGE_MESSAGE_ID, PLAYER_EDGE_FINGERPRINT)];
+
     assert_eq!(
-        encode(&sample(), DeviceStateEdgeCodec::encode),
-        encode(&sample(), DeviceStateEdgeCodec::encode)
+        cyclone_handshake(0xDEAD_BEEF_0000_0000, &peer),
+        CycloneHandshake::Outdated
     );
+}
+
+/// A peer that knows `Player.edge` as a different shape. There is nothing to
+/// negotiate.
+#[test]
+fn handshake_breaking_is_rejected() {
+    let peer = [(PLAYER_EDGE_MESSAGE_ID, PLAYER_EDGE_FINGERPRINT ^ 1)];
+
+    assert_eq!(
+        cyclone_handshake(0xDEAD_BEEF_0000_0000, &peer),
+        CycloneHandshake::Reject
+    );
+}
+
+/// A message only the peer has says nothing about the messages we share - it
+/// is the definition of being one version behind.
+#[test]
+fn a_message_only_one_side_knows_does_not_reject() {
+    let peer = [
+        (PLAYER_EDGE_MESSAGE_ID, PLAYER_EDGE_FINGERPRINT),
+        (0x1234_5678, 0xAAAA_BBBB_CCCC_DDDD),
+    ];
+
+    assert_eq!(
+        cyclone_handshake(0xDEAD_BEEF_0000_0000, &peer),
+        CycloneHandshake::Outdated
+    );
+}
+
+/// The envelope is off by default: no frame carries a fingerprint, and the
+/// payload starts at byte zero.
+#[test]
+fn per_frame_validation_is_off_by_default() {
+    const { assert!(!CYCLONE_VALIDATE_MESSAGE_FINGERPRINT) };
+    assert_eq!(encode(&player(), PlayerEdgeCodec::encode).len(), 12);
 }

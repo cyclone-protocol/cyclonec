@@ -1,54 +1,31 @@
-//! What the parser collected, and nothing more.
+//! What the scanner collected, and nothing more.
 //!
-//! This is not an IR. There is no schema here, no type graph, no codec graph, no
-//! dependency graph - only the five things the generator needs to write a call:
-//! which source language the model came from, its name, which codecs it
-//! declares, and for each field its name, its network type and which codecs it
-//! belongs to.
+//! This is deliberately *not* the IR. It is the raw reading of one source file:
+//! which type is a model, which codecs it declared, and for each annotated
+//! field its name, the network type the annotation spelled, and which codecs it
+//! joined. Nothing is resolved, checked or canonicalised here.
 //!
-//! Everything else about the source is dropped on the way in. The host
-//! language's type of a field is never recorded, because the generator never
-//! asks: `#[network(TYPE)]`, `[Network("TYPE")]`, or `` `cyclone:"TYPE"` `` is
-//! the answer, and whether the two agree is the host compiler's question.
+//! [`crate::ir`] is the next step and the source of truth: it takes these,
+//! resolves each `network_type` string into a [`crate::ir::WireType`], checks
+//! the schema as a whole, and computes fingerprints. Everything downstream -
+//! generated code, `schema.json`, the build graph - is derived from the IR and
+//! never from this.
 //!
-//! # Rust, C# and Go produce the same shape
-//!
-//! `#[network(u32)]`, `[Network("u32")]`, and `` `cyclone:"u32"` `` are three
-//! spellings of one fact: this field is a Cyclone `u32`. All three scanners
-//! resolve to the identical [`Field::network_type`] string - the Cyclone
-//! Specification's own identifier, never a host-language type name - so the
-//! generator that reads this module cannot tell, and does not need to, which
-//! syntax a model was written in. The only thing [`Model::language`] is for is
-//! choosing *which* generator backend renders the model, not what it renders.
+//! The host language's type of a field is never recorded, because nothing ever
+//! asks: `#[network(TYPE)]` is the answer, and whether the two agree is the host
+//! compiler's question.
 
-/// Which source syntax a [`Model`] was read from.
-///
-/// This selects a generator backend and an output file extension. It carries no
-/// schema information: a model parsed from C# and an equivalent one parsed from
-/// Rust hold the same [`Field::network_type`] strings and produce the same
-/// bytes on the wire, per the Cyclone Specification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Language {
-    /// Read from `#[network]` / `#[codec(...)]` in a `.rs` file.
-    Rust,
-    /// Read from `[Network]` / `[Codec(...)]` in a `.cs` file.
-    CSharp,
-    /// Read from a `//cyclone:model` comment directive and `cyclone:"..."` /
-    /// `codec:"..."` struct tags in a `.go` file.
-    Go,
-    /// Read from `# cyclone:model` / `# cyclone:TYPE` comment directives in a
-    /// `.gd` file. GDScript has no attribute syntax the compiler recognizes for
-    /// arbitrary user metadata (an unrecognized `@` annotation is a parse
-    /// error), so - like Go - Cyclone metadata lives in a comment.
-    GDScript,
-}
+use std::path::PathBuf;
 
-/// A struct (or, in C#, a struct or class) marked as a Cyclone network model.
+/// A struct marked as a Cyclone network model.
+#[derive(Debug, Clone)]
 pub struct Model {
-    /// Which source syntax this model was read from.
-    pub language: Language,
     /// The type name, as the source spells it.
     pub name: String,
+    /// The file it was read from, as given on the command line.
+    pub source: PathBuf,
+    /// The line its `#[network]` was on, for error messages.
+    pub line: usize,
     /// The codecs the model declares, in the order written.
     ///
     /// These, and only these, are generated. A field naming a codec the model
@@ -58,28 +35,27 @@ pub struct Model {
     pub fields: Vec<Field>,
 }
 
-/// A field marked `#[network(TYPE)]` (Rust) or `[Network("TYPE")]` (C#).
+/// A field marked `#[network(TYPE)]`.
+#[derive(Debug, Clone)]
 pub struct Field {
     /// The field name, used to reach the value.
     pub name: String,
     /// The Cyclone network type, exactly as the annotation spelled it.
-    ///
-    /// Either a primitive the generator knows a method for, or a name it treats
-    /// as another model. Nothing here decides which - [`crate::generator`] does,
-    /// with a table lookup and no analysis.
     pub network_type: String,
     /// The codecs this field belongs to, in the order written.
     ///
     /// A field with none belongs to none, and is written by no codec.
     pub codecs: Vec<String>,
+    /// The line the field's `#[network(...)]` was on.
+    pub line: usize,
 }
 
 impl Model {
     /// The fields belonging to `codec`, in declaration order.
     ///
-    /// Declaration order is the whole of the ordering rule: a codec writes its
-    /// fields in the order the struct declares them, skipping the ones that did
-    /// not name it.
+    /// Declaration order is the whole of the ordering rule (RFC-0002 §5.1): a
+    /// codec writes its fields in the order the struct declares them, skipping
+    /// the ones that did not name it.
     pub fn fields_in<'a>(&'a self, codec: &'a str) -> impl Iterator<Item = &'a Field> {
         self.fields
             .iter()
@@ -87,107 +63,11 @@ impl Model {
     }
 }
 
-/// Checks that every nested-model field routes only into codecs the
-/// *referenced* model actually declares.
-///
-/// A field whose Cyclone type names another model - `#[network(PlayerInfo)]`,
-/// `[Network("PlayerInfo")]`, `` `cyclone:"PlayerInfo"` `` - carries its own
-/// codec list over to the nested call: routing `Player.info` into `edge` means
-/// the generated `PlayerEdgeCodec` calls `PlayerInfoEdgeCodec`. If `PlayerInfo`
-/// itself never declared an `edge` codec, that call names a type nothing will
-/// ever generate - a dangling reference the three backends have no way to
-/// notice on their own, because each renders one model at a time and never
-/// looks at another model's own codec list.
-///
-/// This is the one thing generation itself must catch before writing anything:
-/// unlike a Cyclone type this run never parsed at all (a hand-written codec, a
-/// type from another package), which is rightly left for the host compiler to
-/// resolve or reject, a model *this run did parse* has already told us exactly
-/// which codecs it has. Silently emitting the call anyway would defer a
-/// knowable error to a confusing one, in whichever host compiler hits it
-/// first - and design a validation that requires nothing this crate doesn't
-/// already have: the check is pure comparison of the metadata already
-/// collected, run once per language before that language's models are handed
-/// to its generator.
-///
-/// # Errors
-///
-/// The first dangling reference found, naming the model, the field, the codec,
-/// and what the referenced model declares instead.
-pub fn check_nested_codecs(models: &[Model]) -> Result<(), String> {
-    for model in models {
-        for codec in &model.codecs {
-            for field in model.fields_in(codec) {
-                // `Array<PlayerInfo>` routes exactly like a bare
-                // `PlayerInfo` field would - the element type is what must
-                // declare the codec, not the string `"Array<PlayerInfo>"`
-                // itself, which no model is ever named.
-                let element_type = array_element_type(&field.network_type)
-                    .unwrap_or(field.network_type.as_str());
-
-                let Some(referenced) =
-                    models.iter().find(|candidate| candidate.name == element_type)
-                else {
-                    // Not a model this run parsed - a primitive, or a type
-                    // defined elsewhere. Left to the host compiler, same as
-                    // ever: see h.md's own "let native compiler resolve
-                    // missing symbols" rule.
-                    continue;
-                };
-
-                if referenced.codecs.iter().any(|declared| declared == codec) {
-                    continue;
-                }
-
-                let declares = if referenced.codecs.is_empty() {
-                    "no codecs".to_owned()
-                } else {
-                    format!("only: {}", referenced.codecs.join(", "))
-                };
-                return Err(format!(
-                    "model '{}' field '{}' routes into codec '{codec}', but the model it \
-                     references, '{}', declares {declares} - '{}{}Codec' would never be \
-                     generated",
-                    model.name,
-                    field.name,
-                    referenced.name,
-                    referenced.name,
-                    pascal_case(codec),
-                ));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// If `network_type` is the array composite `Array<T>` (RFC-0002 §6), the
-/// element type `T`. `None` for anything else, including a malformed
-/// `Array<` with no closing `>` or an empty `Array<>` - a malformed type
-/// name is a generator's own validation to report, not this shared helper's
-/// to guess at.
-///
-/// Every scanner captures a field's network type as an opaque string (see
-/// this module's own header) and never interprets it - this is the one
-/// exception, needed so `Array<u32>` can be told apart from a nested
-/// model's bare name, `PlayerInfo`, by [`check_nested_codecs`] and by each
-/// generator's own field codegen alike, without four separate copies of the
-/// same string-slicing.
-pub fn array_element_type(network_type: &str) -> Option<&str> {
-    let inner = network_type.strip_prefix("Array<")?.strip_suffix('>')?;
-    if inner.is_empty() {
-        None
-    } else {
-        Some(inner)
-    }
-}
-
 /// Turns a codec identifier into the PascalCase fragment of a generated name.
 ///
-/// `edge` becomes `Edge`, `orange_pi` becomes `OrangePi`, `custom_a` becomes
-/// `CustomA`. That is the entire meaning a codec name has here: the generator
-/// never resolves it, imports it, or looks it up - it spells a type name with it
-/// and moves on.
+/// `edge` becomes `Edge`, `orange_pi` becomes `OrangePi`. That is the entire
+/// meaning a codec name has: the generator never resolves it, imports it, or
+/// looks it up - it spells a type name with it and moves on.
 pub fn pascal_case(identifier: &str) -> String {
     let mut out = String::with_capacity(identifier.len());
     let mut capitalise = true;
@@ -206,4 +86,60 @@ pub fn pascal_case(identifier: &str) -> String {
     }
 
     out
+}
+
+/// Turns an identifier into the snake_case fragment of a generated file name:
+/// `PlayerInfo` becomes `player_info`, `orange_pi` stays `orange_pi`.
+pub fn snake_case(identifier: &str) -> String {
+    screaming_snake_case(identifier).to_lowercase()
+}
+
+/// Turns an identifier into the SCREAMING_SNAKE_CASE fragment of a generated
+/// constant name: `PlayerInfo` becomes `PLAYER_INFO`, `orange_pi` stays
+/// `ORANGE_PI`.
+pub fn screaming_snake_case(identifier: &str) -> String {
+    let mut out = String::with_capacity(identifier.len() + 4);
+    let mut previous_was_lower = false;
+
+    for character in identifier.chars() {
+        if character == '_' {
+            out.push('_');
+            previous_was_lower = false;
+            continue;
+        }
+        if character.is_uppercase() && previous_was_lower {
+            out.push('_');
+        }
+        previous_was_lower = character.is_lowercase() || character.is_numeric();
+        out.extend(character.to_uppercase());
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pascal_case, screaming_snake_case};
+
+    #[test]
+    fn pascal_case_spells_generated_type_names() {
+        assert_eq!(pascal_case("edge"), "Edge");
+        assert_eq!(pascal_case("orange_pi"), "OrangePi");
+        assert_eq!(pascal_case("custom_a"), "CustomA");
+    }
+
+    #[test]
+    fn screaming_snake_case_spells_generated_constant_names() {
+        assert_eq!(screaming_snake_case("Player"), "PLAYER");
+        assert_eq!(screaming_snake_case("PlayerInfo"), "PLAYER_INFO");
+        assert_eq!(screaming_snake_case("orange_pi"), "ORANGE_PI");
+        assert_eq!(screaming_snake_case("HTTPServer"), "HTTPSERVER");
+    }
+
+    #[test]
+    fn snake_case_spells_generated_file_names() {
+        assert_eq!(super::snake_case("Player"), "player");
+        assert_eq!(super::snake_case("PlayerInfo"), "player_info");
+        assert_eq!(super::snake_case("orange_pi"), "orange_pi");
+    }
 }
