@@ -17,16 +17,16 @@
 //!
 //! Every other scanner in this project reports exactly one error - a network
 //! field with no wire type. Go's directive comment adds a second failure mode
-//! that has no Rust or C# counterpart: `//cyclone:model` is text on a line by
+//! that has no Rust counterpart: `//cyclone:model` is text on a line by
 //! itself, with nothing in the language forcing it to sit next to the type it
 //! names. A directive not immediately followed by a `type ... struct` - a
 //! typo'd struct, a `func`, end of file - would otherwise mark nothing and
-//! vanish silently, which is exactly the "malformed Cyclone directive" h.md §12
-//! forbids passing over in silence.
+//! vanish silently, which is exactly the kind of malformed-directive silence
+//! the brief forbids passing over.
 
 use std::path::Path;
 
-use crate::model::{Field, Language, Model};
+use crate::model::{Field, Model};
 use crate::parser::Error;
 
 /// Extracts every `//cyclone:model` struct from `text`.
@@ -39,16 +39,21 @@ use crate::parser::Error;
 /// compile for any other reason is the Go compiler's to report.
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     let tokens = lex(text);
-    Scanner { path, tokens: &tokens, at: 0 }.file()
+    Scanner {
+        path,
+        tokens: &tokens,
+        at: 0,
+    }
+    .file()
 }
 
 /// The `package` clause a Go source file declares, if any.
 ///
 /// Go compiles by directory, not by file: every `.go` file in the directory
-/// the generated output lands in must declare the same package, or nothing in
-/// it - including the model types the generated codecs name - will resolve.
-/// `cyclonec` never resolves that itself; it just needs one name to put on the
-/// generated file's own `package` line, and this is where it reads it from.
+/// generated output lands in must declare the same package (including the
+/// model types the generated codecs name), or nothing in it will resolve.
+/// `cyclonec` never resolves that itself; this is where it reads the one name
+/// it needs, to spell a qualified reference like `models.Player`.
 pub fn package_name(text: &str) -> Option<String> {
     let tokens = lex(text);
     tokens
@@ -78,7 +83,7 @@ impl<'a> Scanner<'a> {
                     let line = token.line;
                     self.bump();
                     let codecs = parse_directive_arguments(arguments)
-                        .map_err(|message| self.error(line, &message))?;
+                        .map_err(|message| self.error(line, message))?;
                     models.push(self.model_after_directive(line, codecs)?);
                 }
                 _ => {
@@ -92,24 +97,34 @@ impl<'a> Scanner<'a> {
 
     /// Reads the `type Name struct { ... }` a directive must be followed by.
     fn model_after_directive(&mut self, line: usize, codecs: Vec<String>) -> Result<Model, Error> {
-        if !self.peek().is_some_and(|token| token.kind == Kind::Ident("type")) {
+        if !self
+            .peek()
+            .is_some_and(|token| token.kind == Kind::Ident("type"))
+        {
             return Err(self.error(
                 line,
                 "//cyclone:model must be immediately followed by a `type Name struct { ... }` \
-                 declaration",
+                 declaration"
+                    .to_owned(),
             ));
         }
         self.bump();
 
         let Some(name) = self.peek().and_then(Token::ident) else {
-            return Err(self.error(line, "//cyclone:model: expected a type name after `type`"));
+            return Err(self.error(
+                line,
+                "//cyclone:model: expected a type name after `type`".to_owned(),
+            ));
         };
         self.bump();
 
-        if !self.peek().is_some_and(|token| token.kind == Kind::Ident("struct")) {
+        if !self
+            .peek()
+            .is_some_and(|token| token.kind == Kind::Ident("struct"))
+        {
             return Err(self.error(
                 line,
-                &format!(
+                format!(
                     "//cyclone:model marks `{name}`, which is not a struct: only a struct \
                      can be a Cyclone model"
                 ),
@@ -117,14 +132,18 @@ impl<'a> Scanner<'a> {
         }
         self.bump();
 
-        if !self.peek().is_some_and(|token| token.kind == Kind::Punct('{')) {
-            return Err(self.error(line, "//cyclone:model: expected `struct {`"));
+        if !self
+            .peek()
+            .is_some_and(|token| token.kind == Kind::Punct('{'))
+        {
+            return Err(self.error(line, "//cyclone:model: expected `struct {`".to_owned()));
         }
         let open = self.at;
 
         Ok(Model {
-            language: Language::Go,
             name: name.to_owned(),
+            source: self.path.to_path_buf(),
+            line,
             codecs,
             fields: self.fields(open)?,
         })
@@ -149,10 +168,9 @@ impl<'a> Scanner<'a> {
 
             // A field is `Name Type` (or `Name Type \`tag\``), always the first
             // thing on its line inside the body. A comma-separated name list
-            // (`A, B int`) is deliberately not supported - see the module docs
-            // on scope - so only the leading identifier is read as a name, and
-            // everything else up to the end of the line is the type and,
-            // optionally, the tag.
+            // (`A, B int`) is deliberately not supported, so only the leading
+            // identifier is read as a name, and everything else up to the end
+            // of the line is the type and, optionally, the tag.
             let line = token.line;
             self.bump();
 
@@ -166,7 +184,7 @@ impl<'a> Scanner<'a> {
 
             let Some(tag) = tag else {
                 // No struct tag at all: not a network field, and not an error -
-                // the same treatment an unannotated field gets in Rust and C#.
+                // the same treatment an unannotated field gets in Rust.
                 continue;
             };
 
@@ -175,13 +193,17 @@ impl<'a> Scanner<'a> {
 
             match parsed.cyclone {
                 Some(network_type) if !network_type.is_empty() => {
-                    fields.push(Field { name: name.to_owned(), network_type, codecs });
+                    fields.push(Field {
+                        name: name.to_owned(),
+                        network_type,
+                        codecs,
+                        line,
+                    });
                 }
                 _ if !codecs.is_empty() => {
-                    return Err(self.error(
-                        line,
-                        &format!("field '{name}' is missing cyclone wire type"),
-                    ));
+                    return Err(
+                        self.error(line, format!("field '{name}' is missing cyclone wire type"))
+                    );
                 }
                 // Neither `cyclone` nor `codec` present: an ordinary Go struct
                 // tag (`json:"..."`, say) on a field Cyclone was never told
@@ -204,8 +226,12 @@ impl<'a> Scanner<'a> {
         self.at += 1;
     }
 
-    fn error(&self, line: usize, message: &str) -> Error {
-        Error { path: self.path.to_path_buf(), line, message: message.to_owned() }
+    fn error(&self, line: usize, message: String) -> Error {
+        Error {
+            path: self.path.to_path_buf(),
+            line,
+            message,
+        }
     }
 
     /// The index of the bracket closing the one at `start`.
@@ -230,7 +256,7 @@ impl<'a> Scanner<'a> {
 
 /// Parses the text after `//cyclone:model`: either nothing (a model with no
 /// codecs - valid, and generates nothing, the same as bare `#[network]` in
-/// Rust or bare `[Network]` in C#), or `codec=name,name,...`.
+/// Rust), or `codec=name,name,...`.
 fn parse_directive_arguments(text: &str) -> Result<Vec<String>, String> {
     let text = text.trim();
     if text.is_empty() {
@@ -249,8 +275,7 @@ fn parse_directive_arguments(text: &str) -> Result<Vec<String>, String> {
 
 /// Splits and trims a comma-separated codec list, dropping empties (so
 /// `codec=` and `codec=,` both mean "no codecs" rather than one blank name)
-/// and repeats, keeping the order written - the same rule every other
-/// scanner's `dedupe` applies.
+/// and repeats, keeping the order written.
 fn split_codec_list(list: String) -> Vec<String> {
     let mut seen = Vec::new();
     let mut out = Vec::new();
@@ -284,7 +309,10 @@ struct Tag {
 /// other key's value does not throw off where `cyclone`'s or `codec`'s value
 /// ends. Any other key (`json`, `yaml`, ...) is skipped.
 fn parse_tag(text: &str) -> Tag {
-    let mut tag = Tag { cyclone: None, codec: None };
+    let mut tag = Tag {
+        cyclone: None,
+        codec: None,
+    };
     let bytes = text.as_bytes();
     let mut at = 0;
 
@@ -406,7 +434,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
         }
 
         if byte == b'/' && bytes.get(at + 1) == Some(&b'/') {
-            let start = at;
             let content_start = at + 2;
             while at < bytes.len() && bytes[at] != b'\n' {
                 at += 1;
@@ -418,10 +445,12 @@ fn lex(text: &str) -> Vec<Token<'_>> {
                 // `//cyclone:modeling` is an ordinary comment that happens to
                 // start the same way.
                 if arguments.is_empty() || arguments.starts_with(char::is_whitespace) {
-                    tokens.push(Token { kind: Kind::Directive(arguments), line });
+                    tokens.push(Token {
+                        kind: Kind::Directive(arguments),
+                        line,
+                    });
                 }
             }
-            let _ = start;
             continue;
         }
 
@@ -449,7 +478,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
                 }
                 at += 1;
             }
-            tokens.push(Token { kind: Kind::Str(&text[start..at]), line });
+            tokens.push(Token {
+                kind: Kind::Str(&text[start..at]),
+                line,
+            });
             at = (at + 1).min(bytes.len());
             continue;
         }
@@ -461,7 +493,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             while at < bytes.len() && bytes[at] != b'"' && bytes[at] != b'\n' {
                 at += if bytes[at] == b'\\' { 2 } else { 1 };
             }
-            tokens.push(Token { kind: Kind::Str(&text[start..at.min(bytes.len())]), line });
+            tokens.push(Token {
+                kind: Kind::Str(&text[start..at.min(bytes.len())]),
+                line,
+            });
             at = (at + 1).min(bytes.len());
             continue;
         }
@@ -473,7 +508,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
                 at += if bytes[at] == b'\\' { 2 } else { 1 };
             }
             at = (at + 1).min(bytes.len());
-            tokens.push(Token { kind: Kind::Other, line });
+            tokens.push(Token {
+                kind: Kind::Other,
+                line,
+            });
             continue;
         }
 
@@ -482,7 +520,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             while at < bytes.len() && is_ident_continue(bytes[at]) {
                 at += 1;
             }
-            tokens.push(Token { kind: Kind::Ident(&text[start..at]), line });
+            tokens.push(Token {
+                kind: Kind::Ident(&text[start..at]),
+                line,
+            });
             continue;
         }
 
@@ -490,11 +531,17 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             while at < bytes.len() && (is_ident_continue(bytes[at]) || bytes[at] == b'.') {
                 at += 1;
             }
-            tokens.push(Token { kind: Kind::Other, line });
+            tokens.push(Token {
+                kind: Kind::Other,
+                line,
+            });
             continue;
         }
 
-        tokens.push(Token { kind: Kind::Punct(byte as char), line });
+        tokens.push(Token {
+            kind: Kind::Punct(byte as char),
+            line,
+        });
         at += 1;
     }
 
@@ -507,4 +554,73 @@ fn is_ident_start(byte: u8) -> bool {
 
 fn is_ident_continue(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{package_name, parse};
+
+    #[test]
+    fn a_directive_followed_by_a_struct_is_a_model() {
+        let text = "package models\n\n//cyclone:model codec=edge,unity\ntype DeviceState struct {\n\tID uint32 `cyclone:\"u32\" codec:\"edge,unity\"`\n}\n";
+        let models = parse(Path::new("device_state.go"), text).expect("parse");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "DeviceState");
+        assert_eq!(models[0].codecs, ["edge", "unity"]);
+        assert_eq!(models[0].fields.len(), 1);
+        assert_eq!(models[0].fields[0].network_type, "u32");
+    }
+
+    #[test]
+    fn a_directive_not_followed_by_a_struct_is_an_error() {
+        let text = "//cyclone:model\nfunc notAStruct() {}\n";
+        let error = parse(Path::new("bad.go"), text).expect_err("error");
+        assert!(
+            error.message.contains("type Name struct"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_field_with_codec_but_no_wire_type_is_an_error() {
+        let text =
+            "//cyclone:model codec=edge\ntype Player struct {\n\tID uint32 `codec:\"edge\"`\n}\n";
+        let error = parse(Path::new("player.go"), text).expect_err("error");
+        assert!(
+            error.message.contains("missing cyclone wire type"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_field_with_no_tag_at_all_is_skipped_not_an_error() {
+        let text = "//cyclone:model codec=edge\ntype Player struct {\n\tCache string\n\tID uint32 `cyclone:\"u32\" codec:\"edge\"`\n}\n";
+        let models = parse(Path::new("player.go"), text).expect("parse");
+        assert_eq!(models[0].fields.len(), 1);
+        assert_eq!(models[0].fields[0].name, "ID");
+    }
+
+    #[test]
+    fn the_package_clause_is_read_for_import_qualification() {
+        assert_eq!(
+            package_name("package models\n\ntype X struct{}\n"),
+            Some("models".to_owned())
+        );
+        assert_eq!(package_name("type X struct{}\n"), None);
+    }
+
+    #[test]
+    fn a_directive_not_immediately_followed_by_type_is_not_silently_dropped() {
+        let text = "//cyclone:model\nvar notAType = 1\n";
+        let error = parse(Path::new("player.go"), text).expect_err("error");
+        assert!(
+            error.message.contains("immediately followed"),
+            "{}",
+            error.message
+        );
+    }
 }

@@ -1,94 +1,80 @@
-//! The Cyclone runtime, carried verbatim into every generated GDScript file.
+//! The Cyclone runtime, carried verbatim into `runtime.gd`.
 //!
-//! The GDScript counterpart of [`super::rust_runtime`], [`super::csharp_runtime`]
-//! and [`super::go_runtime`] - same reasoning, same guarantee: the block below
-//! is fixed, written once against RFC-0002, and copied out unchanged.
-//!
-//! # Why `PackedByteArray.encode_u32` / `encode_float` and not hand-rolled bit
-//! shifting
-//!
-//! Every other runtime in this project (Rust's `to_le_bytes`, Go's
-//! `encoding/binary.LittleEndian`, C#'s own shift-and-mask) uses an *explicit,
-//! contractually Little Endian* primitive - never the host's native byte
-//! order. `PackedByteArray`'s `encode_u8`/`encode_u16`/.../`encode_float`/
-//! `encode_double` (and the matching `decode_*`) are that primitive for
-//! GDScript: their engine implementation (`core/io/marshalls.h`) writes the
-//! least-significant byte first, unconditionally, regardless of host CPU byte
-//! order - the same explicit-not-native guarantee the other three runtimes
-//! rely on - and floats/doubles round-trip their exact IEEE 754 bits through a
-//! union reinterpretation, not an arithmetic reconstruction, so a NaN payload
-//! and the sign of `-0.0` survive, matching RFC-0002 and every sibling
-//! runtime's own documented promise.
-//!
-//! Two things are worth being honest about, because this is a wire format and
-//! not a detail:
-//!
-//! 1. Godot's own class reference documents this encoding as "an
-//!    implementation detail" not to be relied on "when interacting with
-//!    external apps" - which is exactly this runtime's use. The engine source
-//!    (an explicit byte-shift loop, not a `memcpy`) has not used host-native
-//!    order in any Godot 4 release, and changing it would silently break
-//!    Godot's own multiplayer RPC/save-game serialization, which is built on
-//!    the same primitive - but this is not a documented contract the way
-//!    Rust's `to_le_bytes` is, and a future Godot version is the one thing
-//!    that could move this out from under a generated file without this
-//!    project's own tests (which cannot run a real Godot binary - see the
-//!    generator's module docs) ever seeing it move.
-//! 2. Hand-rolling the same bit shifts in pure GDScript instead - the way the
-//!    other three runtimes do in their own languages - was considered and
-//!    rejected: without a Godot interpreter available to run a single line of
-//!    this against, untested bit-shift arithmetic (particularly GDScript's
-//!    64-bit signed `int` and its arithmetic-shift semantics on negative
-//!    values) is a *larger* correctness risk than trusting an engine
-//!    primitive that ships with, and is exercised continuously by, every
-//!    Godot multiplayer project. See h.md's own priority order - correctness
-//!    first - which is why this tradeoff is decided this way and documented
-//!    here rather than silently picked.
+//! The GDScript counterpart of [`super::rust_runtime`], [`super::go_runtime`]
+//! and [`super::csharp_runtime`] - same reasoning, same guarantee: the block
+//! below is fixed, written once against RFC-0002, and copied out unchanged.
+//! Nothing about byte layout is computed per model, per field, or per run.
 //!
 //! # No exceptions
 //!
-//! GDScript has no `try`/`catch`. Where Rust returns `Result` and C# throws,
-//! decode here returns a `DecodeError` or `null` - the same shape Go's `error`
-//! return already gives this project, adapted to a language with no tuple
-//! destructuring: every read here returns a two-element `Array` (`[value,
-//! error-or-null]`) instead of Go's two-value return, since that is the
-//! nearest GDScript equivalent.
+//! GDScript has no `try`/`catch`. Where Rust returns `Result` and Go returns
+//! `(T, error)`, every `Reader` method here returns a 2-element `Array`,
+//! `[value, error]`, with `error` left `null` on success - the nearest
+//! GDScript equivalent of Go's two-value return, since GDScript cannot
+//! destructure one. `cyclonec_old`'s GDScript backend already worked this way;
+//! nothing about the shape changes here.
 //!
-//! # Instance methods only, never a cross-class-scope call
+//! # `PackedByteArray.encode_u32` / `encode_float`, not hand-rolled bit
+//! shifting
 //!
-//! Every codec, and every runtime type, is an ordinary GDScript class
-//! constructed with `.new()`, and every `DecodeError` is built inline, right
-//! where it is needed, rather than through a shared helper function. Two
-//! uncertainties - neither checkable without a real Godot binary, see the
-//! generator's module docs - are avoided on purpose by that choice: whether a
-//! `static func` is well-formed *inside* a nested class (only "consistent
-//! with the language's general rules," never shown as a combined example),
-//! and whether an inner class's method can call a bare unqualified helper
-//! declared on the file's own outer wrapper class. Skipping both questions
-//! entirely costs a few repeated lines; guessing wrong on either would cost a
-//! file that does not compile.
+//! Every other runtime in this project uses an *explicit, contractually
+//! Little Endian* primitive - Rust's `to_le_bytes`, Go's
+//! `encoding/binary.LittleEndian`, C#'s own shift-and-mask - never the host's
+//! native byte order. `PackedByteArray`'s `encode_u8`/`encode_u16`/.../
+//! `encode_float`/`encode_double` (and the matching `decode_*`) are that
+//! primitive for GDScript: their engine implementation writes the
+//! least-significant byte first, unconditionally, and a float's bits round
+//! trip through a union reinterpretation rather than an arithmetic
+//! reconstruction, so a NaN payload and the sign of `-0.0` survive - matching
+//! RFC-0002 and every sibling runtime's own documented promise. Hand-rolling
+//! the same bit shifts in pure GDScript instead was considered and rejected
+//! for the same reason `cyclonec_old` rejected it: without a Godot
+//! interpreter available in this environment to run a single line of
+//! generated code against, untested bit-shift arithmetic is a larger
+//! correctness risk than trusting an engine primitive every Godot
+//! multiplayer project already depends on.
+//!
+//! # One file, one `class_name`, and what changed from `cyclonec_old`
+//!
+//! `cyclonec_old` wrote one big file: every runtime type and every codec
+//! nested inside a single fixed wrapper `class_name`, because GDScript's
+//! global reachability only works through a file's own `class_name`, and a
+//! project has exactly one shot at declaring it per file. This project's
+//! architecture already writes one file per model per codec (see
+//! [`super::gdscript`]), which turns out to fit that constraint *better*
+//! than one big file does: `runtime.gd` gets its own `class_name
+//! CycloneRuntime`, reachable project-wide with nothing to `preload`, exactly
+//! like every sibling backend's runtime file - and every codec file gets the
+//! same treatment instead of being squeezed into one shared wrapper.
+//!
+//! The one addition RFC-0002 §9.1 requires: [`Reader.field_absent`], spelled
+//! the way [`super::rust_runtime`]'s method of the same name is (both
+//! languages' style guides favour snake_case for a method), which
+//! `cyclonec_old`'s runtime did not have - every read there simply returned
+//! an `unexpected_eof` error, so a generated decoder could not tell "this
+//! field never arrived" from "this field arrived truncated" and could not
+//! implement version skew at all.
 
-/// The runtime block, emitted once at the top of every generated GDScript
-/// file, at column 0 alongside the file's own `class_name` wrapper (see
-/// [`super::gdscript::WRAPPER_CLASS_NAME`] - `class_name` does not open an
-/// indented block, so these are sibling declarations, not nested ones) so
-/// every type here is reachable project-wide as `CycloneCodec.Writer`,
-/// `CycloneCodec.Reader`, ... with nothing to `preload` or `import` -
-/// GDScript's own counterpart of Rust's `include!`, C#'s "just add the file
-/// to the project", and Go's "same package".
-pub const RUNTIME: &str = r#"
-# ======================================================================
+/// The runtime block, emitted once, into its own file, right after the
+/// file's own `class_name CycloneRuntime` line (see
+/// [`super::gdscript::wrapper_file`]) - every type here is reachable
+/// project-wide as `CycloneRuntime.Writer`, `CycloneRuntime.Reader`, ... with
+/// nothing to `preload`, the same "nothing to add, nothing to import"
+/// guarantee every sibling runtime gives.
+pub const RUNTIME: &str = r####"
+# ==========================================================================
 # Cyclone runtime - RFC-0002, carried verbatim.
 #
 # Not generated from your models: this block is identical in every file
-# cyclonec writes. It is here so the file is self-contained.
-# ======================================================================
+# cyclonec writes. It is here so the file is self-contained - nothing to
+# preload, nothing to add to your project beyond this one file.
+# ==========================================================================
 
 # A byte stream that does not satisfy the Cyclone Specification.
 #
-# GDScript has no exceptions, so every `decode` below returns a
-# DecodeError (or null, on success) instead of throwing one - see this
-# module's file-level docs.
+# GDScript has no exceptions, so every `decode` in this project returns a
+# DecodeError (or null, on success) instead of throwing one, and every
+# `Reader` read below returns `[value, error]` instead of a bare value.
 class DecodeError:
 	var kind: String = ""
 	var needed: int = 0
@@ -110,7 +96,7 @@ class DecodeError:
 			_:
 				return "cyclone: decode error"
 
-# Allocation guards applied while decoding (RFC-0002 §4).
+# Allocation guards applied while decoding (RFC-0002 §12).
 #
 # A u32 length can claim up to 4 GiB, so a decoder that allocates straight
 # from an untrusted one is a denial-of-service target. These are not part
@@ -174,10 +160,11 @@ class Writer:
 	# u64/i64 share one 64-bit two's-complement word either way: GDScript's
 	# `int` is itself a 64-bit signed value, so a `u64` field whose top bit
 	# is set reads back as a negative GDScript `int` - the wire bytes are
-	# still exactly right (h.md's own rule: no native type decides the
-	# wire format). Interpreting that bit pattern as unsigned, if a caller
-	# needs to, is the caller's business, the same way this project leaves
-	# an `[Network("u32")]` on a C# `ulong` to the C# compiler.
+	# still exactly right (no native type decides the wire format).
+	# Interpreting that bit pattern as unsigned, if a caller needs to, is
+	# the caller's business, the same way this project leaves a
+	# `# cyclone:u32` field's native width to every other host language's
+	# own compiler.
 	func write_i64(value: int) -> void:
 		var start := buf.size()
 		buf.resize(start + 8)
@@ -242,6 +229,27 @@ class Reader:
 		return buf.size() - pos
 
 	func is_empty() -> bool:
+		return remaining() == 0
+
+	# Whether the field about to be read is absent rather than truncated
+	# (RFC-0002 §9.1).
+	#
+	# A generated decoder calls this at every field boundary:
+	#
+	#     remaining() == 0 at a field boundary
+	#       -> the writer's model stopped here; this field and every field
+	#          after it are absent, and take their zero value. Not an error.
+	#
+	#     remaining() > 0 but fewer bytes than the field needs
+	#       -> the field started and the stream ran out inside it. That is
+	#          a truncated packet: DecodeError("unexpected_eof"), never a
+	#          zero.
+	#
+	# Treating a partial field as a zero would hide packet corruption
+	# behind a plausible value, which is the whole reason this method
+	# exists rather than every field simply reading and taking whatever
+	# `unexpected_eof` gives it.
+	func field_absent() -> bool:
 		return remaining() == 0
 
 	func read_bool() -> Array:
@@ -409,4 +417,4 @@ class Reader:
 		var out := buf.slice(pos, pos + length)
 		pos += length
 		return [out, null]
-"#;
+"####;

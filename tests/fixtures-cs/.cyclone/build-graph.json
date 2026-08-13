@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "generator": "cyclonec 0.2.0",
+  "schema_fingerprint": "sha256:5407d680d673ae1ed10fc203be18c52a4bb68fe316b47f112367dae9e8421ed4",
+  "sha256_of": "each file with its `// generated-at:` line emptied, so an unchanged schema keeps an unchanged digest",
+  "sources": {
+    "src/models/Player.cs": {
+      "models": [
+        "Player",
+        "PlayerInfo",
+        "Team"
+      ],
+      "outputs": [
+        {
+          "path": "src/generated/player_edge.cs",
+          "model": "Player",
+          "codec": "edge",
+          "fingerprint": "sha256:ee4b267575548a077d0875042492f444282502779bd198cfcc6ee8851545f1a4",
+          "sha256": "4f8631f92af770bee49f93661e2791d7fe67a674e564c60bb175e0c9a37366a5"
+        },
+        {
+          "path": "src/generated/player_unity.cs",
+          "model": "Player",
+          "codec": "unity",
+          "fingerprint": "sha256:293b91b31f6c09852736a76cbabb96a01b4d9ec58036081d26ebed7818d83254",
+          "sha256": "6bb78ee0c0348ff8614fc35a7b13605c3e4a6a4b424d83fec712d410dbe6eb27"
+        },
+        {
+          "path": "src/generated/player_info_edge.cs",
+          "model": "PlayerInfo",
+          "codec": "edge",
+          "fingerprint": "sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168",
+          "sha256": "6127908a0e1a76dcb2b0142c881f0f5e6198aec2049b497f73830d5d98a51a0c"
+        },
+        {
+          "path": "src/generated/team_edge.cs",
+          "model": "Team",
+          "codec": "edge",
+          "fingerprint": "sha256:3b370e0d3205fcdcdef5062d4485c6441ef42bf901818945a374ef31ddd0f0a1",
+          "sha256": "084e348641fb3d567a6b240d92123162194b79eb2f3ee33ed888e06c23533821"
+        }
+      ]
+    }
+  },
+  "shared": [
+    {
+      "path": "src/generated/runtime.cs",
+      "kind": "runtime",
+      "sha256": "483f9842d1bcb50a5a0dadc7fa4decb3eec20cc965bc00c82e5bad18d41e9e4b"
+    },
+    {
+      "path": "src/generated/handshake.cs",
+      "kind": "handshake",
+      "sha256": "a400bf2faee3f2f26f6469b90217445d50b77aa2d5d2e7c37f5897639cc6f6dc"
+    }
+  ]
+}

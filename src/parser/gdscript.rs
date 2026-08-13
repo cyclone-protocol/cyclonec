@@ -5,8 +5,8 @@
 //! engine-defined set - `@export`, `@onready`, `@rpc`, `@tool`, ... - is
 //! accepted, and none of them carries arbitrary user metadata). A `.gd` file
 //! using `@network(...)` or `@codec(...)` would not compile in Godot at all,
-//! which is disqualifying: h.md's own requirement is that Cyclone-annotated
-//! GDScript compiles with a stock Godot editor, no Cyclone plugin needed.
+//! which is disqualifying: Cyclone-annotated GDScript must compile with a
+//! stock Godot editor, no Cyclone plugin needed.
 //!
 //! So - like [`super::go`], for the identical reason - Cyclone metadata lives
 //! in a comment:
@@ -44,10 +44,10 @@
 //! this" gate the way Go's word-boundary check gives it. That is deliberate:
 //! there is no way to tell "a typo for `# cyclone:model`" apart from "an
 //! unrelated comment that happens to start the same way" without guessing,
-//! and h.md is explicit that a malformed directive must never pass over in
-//! silence. `# cyclone:modeling this is not a directive` is therefore a
-//! reported error (an attempted field directive with wire type `modeling`
-//! and a malformed `codec=` argument), not a silently ignored comment.
+//! and a malformed directive must never pass over in silence.
+//! `# cyclone:modeling this is not a directive` is therefore a reported error
+//! (an attempted field directive with wire type `modeling` and a malformed
+//! `codec=` argument), not a silently ignored comment.
 //!
 //! # Scope
 //!
@@ -67,10 +67,19 @@
 //! (non-Cyclone) comments in between do not break the association, the same
 //! leniency Go's token-based scanner has for free (a plain comment is not a
 //! token, so it cannot sit "between" a directive and what it marks).
+//!
+//! # No `class_name`-to-namespace question at all
+//!
+//! Go reads a `package` clause off its source, and C# reads a `namespace`,
+//! because a generated codec in either language has to know how to reach a
+//! model that was not declared alongside it. GDScript has nothing of the
+//! kind to read: a model's own `class_name` is already globally reachable
+//! project-wide with nothing to import, so a generated codec spells a model
+//! reference bare, always - see [`super::super::generator::gdscript`].
 
 use std::path::Path;
 
-use crate::model::{Field, Language, Model};
+use crate::model::{Field, Model};
 use crate::parser::Error;
 
 /// Extracts every `# cyclone:model` class from `text`.
@@ -103,8 +112,8 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
                     // A directive where the previous one's declaration was due.
                     return Err(err(path, line, &pending_message(&directive)));
                 }
-                let directive = parse_directive(rest)
-                    .map_err(|message| err(path, line_number, &message))?;
+                let directive =
+                    parse_directive(rest).map_err(|message| err(path, line_number, &message))?;
                 pending = Some((directive, line_number));
                 continue;
             }
@@ -115,10 +124,11 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
 
             if let Some(name) = keyword_identifier(trimmed, "class_name") {
                 match pending.take() {
-                    Some((Directive::Model { codecs }, _)) => {
+                    Some((Directive::Model { codecs }, line)) => {
                         models.push(Model {
-                            language: Language::GDScript,
                             name: name.to_owned(),
+                            source: path.to_path_buf(),
+                            line,
                             codecs,
                             fields: Vec::new(),
                         });
@@ -142,7 +152,13 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
 
             if let Some(name) = keyword_identifier(trimmed, "var") {
                 match pending.take() {
-                    Some((Directive::Field { network_type, codecs }, _)) => {
+                    Some((
+                        Directive::Field {
+                            network_type,
+                            codecs,
+                        },
+                        line,
+                    )) => {
                         let Some(model_index) = current else {
                             return Err(err(
                                 path,
@@ -157,6 +173,7 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
                             name: name.to_owned(),
                             network_type,
                             codecs,
+                            line,
                         });
                     }
                     Some((Directive::Model { .. }, line)) => {
@@ -195,7 +212,10 @@ enum Directive {
     /// `# cyclone:model`, holding the codecs it declared.
     Model { codecs: Vec<String> },
     /// `# cyclone:TYPE`, holding the wire type and the codecs it declared.
-    Field { network_type: String, codecs: Vec<String> },
+    Field {
+        network_type: String,
+        codecs: Vec<String>,
+    },
 }
 
 fn pending_message(directive: &Directive) -> String {
@@ -216,7 +236,7 @@ fn pending_message(directive: &Directive) -> String {
 ///
 /// The exact grammar: `#`, then zero or more spaces, then the literal
 /// `cyclone:`. No space at all (`#cyclone:model`) and one space
-/// (`# cyclone:model`, h.md's own spelling) both match; anything else
+/// (`# cyclone:model`, the canonical spelling) both match; anything else
 /// starting with `#` is an ordinary comment, left alone.
 fn directive_text(trimmed: &str) -> Option<&str> {
     let after_hash = trimmed.strip_prefix('#')?;
@@ -245,7 +265,10 @@ fn parse_directive(text: &str) -> Result<Directive, String> {
     if head == "model" {
         Ok(Directive::Model { codecs })
     } else {
-        Ok(Directive::Field { network_type: head.to_owned(), codecs })
+        Ok(Directive::Field {
+            network_type: head.to_owned(),
+            codecs,
+        })
     }
 }
 
@@ -305,5 +328,124 @@ fn keyword_identifier<'a>(trimmed: &'a str, keyword: &str) -> Option<&'a str> {
 }
 
 fn err(path: &Path, line: usize, message: &str) -> Error {
-    Error { path: path.to_path_buf(), line, message: message.to_owned() }
+    Error {
+        path: path.to_path_buf(),
+        line,
+        message: message.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::parse;
+
+    #[test]
+    fn a_directive_followed_by_class_name_is_a_model() {
+        let text = "# cyclone:model codec=edge,godot\nclass_name DeviceState\n\n# cyclone:u32 codec=edge,godot\nvar id: int\n";
+        let models = parse(Path::new("device_state.gd"), text).expect("parse");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "DeviceState");
+        assert_eq!(models[0].codecs, ["edge", "godot"]);
+        assert_eq!(models[0].fields.len(), 1);
+        assert_eq!(models[0].fields[0].name, "id");
+        assert_eq!(models[0].fields[0].network_type, "u32");
+        assert_eq!(models[0].fields[0].codecs, ["edge", "godot"]);
+    }
+
+    #[test]
+    fn a_model_directive_not_followed_by_class_name_is_an_error() {
+        let text = "# cyclone:model\nfunc not_a_class() -> void:\n\tpass\n";
+        let error = parse(Path::new("bad.gd"), text).expect_err("error");
+        assert!(
+            error.message.contains("class_name Name"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_field_directive_not_followed_by_var_is_an_error() {
+        let text = "# cyclone:model\nclass_name Player\n\n# cyclone:u32\nfunc get_id() -> int:\n\treturn 0\n";
+        let error = parse(Path::new("player.gd"), text).expect_err("error");
+        assert!(error.message.contains("var name"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_field_with_no_directive_at_all_is_skipped_not_an_error() {
+        let text = "# cyclone:model codec=edge\nclass_name Player\n\nvar cache: String\n\n# cyclone:u32 codec=edge\nvar id: int\n";
+        let models = parse(Path::new("player.gd"), text).expect("parse");
+        assert_eq!(models[0].fields.len(), 1);
+        assert_eq!(models[0].fields[0].name, "id");
+    }
+
+    #[test]
+    fn a_field_directive_with_no_model_open_yet_is_an_error() {
+        let text = "# cyclone:u32\nvar id: int\n";
+        let error = parse(Path::new("player.gd"), text).expect_err("error");
+        assert!(
+            error
+                .message
+                .contains("no `# cyclone:model` / `class_name`"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn an_unmarked_class_name_is_not_a_model_and_not_an_error() {
+        let text = "class_name NotAModel\nvar id: int\n";
+        let models = parse(Path::new("plain.gd"), text).expect("parse");
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn a_malformed_directive_argument_is_reported() {
+        let text = "# cyclone:model weird=stuff\nclass_name Player\n";
+        let error = parse(Path::new("player.gd"), text).expect_err("error");
+        assert!(
+            error.message.contains("codec=name,name,..."),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_typo_of_the_directive_prefix_is_still_a_reported_error() {
+        // Unlike Go's word-boundary check, everything after `# cyclone:` here
+        // *is* Cyclone's - there is no second "did I mean this" gate.
+        let text = "# cyclone:modeling this is not a directive\nclass_name Player\n";
+        let error = parse(Path::new("player.gd"), text).expect_err("error");
+        assert!(error.message.contains("modeling"), "{}", error.message);
+    }
+
+    #[test]
+    fn blank_lines_and_plain_comments_do_not_break_an_association() {
+        let text = "# cyclone:model codec=edge\n\n# just a comment\n\nclass_name Player\n\n# cyclone:u32 codec=edge\n\n# another comment\n\nvar id: int\n";
+        let models = parse(Path::new("player.gd"), text).expect("parse");
+        assert_eq!(models[0].name, "Player");
+        assert_eq!(models[0].fields[0].name, "id");
+    }
+
+    #[test]
+    fn a_nested_indented_directive_is_out_of_scope() {
+        let text = "# cyclone:model codec=edge\nclass_name Player\n\nclass Nested:\n\t# cyclone:u32 codec=edge\n\tvar id: int\n";
+        // Only column-0 lines are ever inspected for a directive at all, so
+        // the indented `# cyclone:u32` inside `Nested` is never even read as
+        // one - it is simply invisible, the same non-handling the C# scanner
+        // gives a nested type. Not an error: `Player` parses with no fields.
+        let models = parse(Path::new("player.gd"), text).expect("parse");
+        assert_eq!(models.len(), 1);
+        assert!(models[0].fields.is_empty(), "{:?}", models[0].fields);
+    }
+
+    #[test]
+    fn source_and_line_are_tracked_for_error_messages() {
+        let text = "# cyclone:model codec=edge\nclass_name Player\n\n# cyclone:u32 codec=edge\nvar id: int\n";
+        let models = parse(Path::new("models/player.gd"), text).expect("parse");
+        assert_eq!(models[0].source, Path::new("models/player.gd"));
+        assert_eq!(models[0].line, 1);
+        assert_eq!(models[0].fields[0].line, 4);
+    }
 }

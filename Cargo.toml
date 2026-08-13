@@ -1,8 +1,8 @@
 [package]
 name = "cyclonec"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "The official Cyclone source generator: reads Cyclone attributes and writes Encode/Decode calls. Not a compiler, not a runtime."
+description = "The official Cyclone source generator: reads Cyclone attributes, writes one codec file per model/codec, and emits the schema, fingerprints and build graph that go with them."
 license = "Apache-2.0"
 keywords = ["cyclone", "codegen", "source-generator", "codec", "binary"]
 categories = ["development-tools", "command-line-utilities"]
@@ -10,22 +10,34 @@ readme = "README.md"
 repository = "https://github.com/cyclone-protocol/cyclonec"
 homepage = "https://cyclone-protocol.github.io"
 
+[lib]
+name = "cyclonec"
+path = "src/lib.rs"
+
 [[bin]]
 name = "cyclonec"
-path = "src/main.rs"
+path = "src/bin/cyclonec.rs"
 
-# No dependencies, and none are wanted. `cyclonec` does not parse Rust - it
-# looks for four markers and writes call sites - so a full syntax library would
-# cost startup time and buy nothing. See `parser.rs`.
+[[bin]]
+name = "cyclone-inspect"
+path = "src/bin/cyclone_inspect.rs"
+
+# No dependencies, and none are wanted - not in the generator, and not in what
+# it generates. `cyclonec` does not parse Rust; it looks for four markers and
+# writes call sites (see `parser/rust.rs`). SHA-256, JSON and the TOML subset it
+# needs are each a few dozen lines, written here so that the fingerprint
+# algorithm has no version to drift with.
+
+# Test-only, and only for one reason: `tests/fixtures/models/` is annotated
+# source, and `#[network]` has to exist for `rustc` to accept it. The fixture is
+# a real project - one model, annotated in place, with the generated codecs
+# compiled against that same type - and it could not be that without this.
+# `cyclonec` itself, and everything it writes, still depends on nothing.
+[dev-dependencies]
+cyclone-attributes = "0.1.0"
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true
-
-# Test-only. The fixture is annotated source, so the test crate needs the
-# attributes to compile it. `cyclonec` itself depends on nothing.
-[dev-dependencies]
-cyclone-attributes = "0.1.0"

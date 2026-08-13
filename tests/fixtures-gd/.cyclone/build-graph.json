@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "generator": "cyclonec 0.2.0",
+  "schema_fingerprint": "sha256:3b90e97657794c587e9e63b2584cd5240fe055ac9a9ce48cd2e42a546fe258fe",
+  "sha256_of": "each file with its `// generated-at:` line emptied, so an unchanged schema keeps an unchanged digest",
+  "sources": {
+    "src/models/player.gd": {
+      "models": [
+        "Player"
+      ],
+      "outputs": [
+        {
+          "path": "src/generated/player_edge.gd",
+          "model": "Player",
+          "codec": "edge",
+          "fingerprint": "sha256:231dd2d8744fecc3198c9853ffafe18023c93670fe7822c4cd9638fe9eabbe8b",
+          "sha256": "16ce7a54bdb902a4ed0241dae7054a00276fb9970fe8c27c89e93de91473c0b5"
+        },
+        {
+          "path": "src/generated/player_unity.gd",
+          "model": "Player",
+          "codec": "unity",
+          "fingerprint": "sha256:759177cebb0af4afd99b0e11f7cc639333fc1a127bab51ff74feda695d76ee11",
+          "sha256": "0e6779c14b93e9d5e8c12d28b6a2da827475e9c92011c5ae1c21de6444fae1c6"
+        }
+      ]
+    },
+    "src/models/player_info.gd": {
+      "models": [
+        "PlayerInfo"
+      ],
+      "outputs": [
+        {
+          "path": "src/generated/player_info_edge.gd",
+          "model": "PlayerInfo",
+          "codec": "edge",
+          "fingerprint": "sha256:81962b09e3bcca4d6f5e160195d3fbe7d5af9e174ddb386474bd0c04284a5647",
+          "sha256": "bacbb0b71611d22b446c28fe79dde028cb7a031c7b3e6669f6a25b64a813c675"
+        }
+      ]
+    },
+    "src/models/team.gd": {
+      "models": [
+        "Team"
+      ],
+      "outputs": [
+        {
+          "path": "src/generated/team_edge.gd",
+          "model": "Team",
+          "codec": "edge",
+          "fingerprint": "sha256:1b0bfc430d3291ddab719ab1a90b554508e515a3f5018a01f87b84734d477384",
+          "sha256": "c9c1f224c69654a3b0d1f5820373b74b6f5cad99a472272dee08950d04e938bb"
+        }
+      ]
+    }
+  },
+  "shared": [
+    {
+      "path": "src/generated/runtime.gd",
+      "kind": "runtime",
+      "sha256": "df1fdc33a40ac5a9120e8f563ece7431be585f409eba8305bcdd23f8d80d2bc6"
+    },
+    {
+      "path": "src/generated/handshake.gd",
+      "kind": "handshake",
+      "sha256": "9a1ef91cba7d35bb1f1d120c27a55d698ec8881b21e1a05e16c1375633c489b1"
+    }
+  ]
+}

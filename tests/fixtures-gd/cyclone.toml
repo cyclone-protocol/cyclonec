@@ -1,0 +1,15 @@
+# The fixture project, laid out the way a real Godot project is: `src/`
+# holds the annotated models, and the generated tree lands beside it at
+# `src/generated/` - the GDScript counterpart of tests/fixtures-cs/cyclone.toml.
+src = "src"
+out = "src/generated"
+
+# No `model_path`: GDScript has nothing for it to override - every model's own
+# `class_name` is already reachable project-wide with nothing to import, so
+# there is no per-source location for this backend to read or to be told.
+# See generator::gdscript's module docs.
+
+# No project.godot: this fixture is exercised by cyclonec's own test suite
+# only (parsing, generation, --check, byte-for-byte comparison against the
+# committed tree) - nothing here runs a real Godot editor, so a project file
+# it would never actually open would only overstate what has been verified.

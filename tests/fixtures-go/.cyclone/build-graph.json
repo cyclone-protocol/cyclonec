@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "generator": "cyclonec 0.2.0",
+  "schema_fingerprint": "sha256:00a8beab54066d72a4cf91a4cda35594180aa4cc68702e1fef815a613dc11b00",
+  "sha256_of": "each file with its `// generated-at:` line emptied, so an unchanged schema keeps an unchanged digest",
+  "sources": {
+    "src/models/player.go": {
+      "models": [
+        "Player",
+        "PlayerInfo",
+        "Team"
+      ],
+      "outputs": [
+        {
+          "path": "src/generated/player_edge.go",
+          "model": "Player",
+          "codec": "edge",
+          "fingerprint": "sha256:c6557c56ad0d993c745e6036f141c1a21ab346a8718a5cac15a860e7442b3e6c",
+          "sha256": "f644fd3299923fbbd7dfe74d66d2d2808d13dbcf403159af1cf29c48bd03497b"
+        },
+        {
+          "path": "src/generated/player_unity.go",
+          "model": "Player",
+          "codec": "unity",
+          "fingerprint": "sha256:937d3af4cd8eb1e26cef7c768c77601c43b7a3638a350803f04f3c93f6027999",
+          "sha256": "5ecefd973520a7ef4d944b8dc430684bf735de1d7eb3ae1a8582b3b4fe4a8b55"
+        },
+        {
+          "path": "src/generated/player_info_edge.go",
+          "model": "PlayerInfo",
+          "codec": "edge",
+          "fingerprint": "sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168",
+          "sha256": "5ca7da0820f130308541283221c8ba4dc570cb8a107728b7bb16c69dab7efb8f"
+        },
+        {
+          "path": "src/generated/team_edge.go",
+          "model": "Team",
+          "codec": "edge",
+          "fingerprint": "sha256:3b370e0d3205fcdcdef5062d4485c6441ef42bf901818945a374ef31ddd0f0a1",
+          "sha256": "7c3c72441500ed23670e8b050fb98b654b2a614b71ab32ff2dff95c273aa8147"
+        }
+      ]
+    }
+  },
+  "shared": [
+    {
+      "path": "src/generated/runtime.go",
+      "kind": "runtime",
+      "sha256": "d38f0fb8e5860c82251d4274306a551fc7cf39f4c3b8c558e49257d5cd78fdcc"
+    },
+    {
+      "path": "src/generated/handshake.go",
+      "kind": "handshake",
+      "sha256": "2c79d849e05973bab382b45221c7888b3c692a2b9740d0e62b14547f89a177cb"
+    }
+  ]
+}

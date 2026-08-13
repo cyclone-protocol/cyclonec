@@ -1,0 +1,111 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # The unit tests, the generator driven as a binary, the committed
+      # generated tree compiled and run, and the cross-SDK wire vectors.
+      - name: cargo test
+        run: cargo test
+
+      # The fixture tree under tests/fixtures/ is committed and compiled by
+      # tests/generated.rs, so it has to be what the generator writes today.
+      # `--check` writes nothing and fails if it is not.
+      - name: the committed Rust fixture is current
+        working-directory: tests/fixtures
+        run: cargo run --quiet --bin cyclonec -- generate --check
+
+      # The Go fixture has no Rust test that compiles it (`cargo test` never
+      # invokes the Go toolchain), so both checks live here: current, and
+      # actually buildable.
+      - name: the committed Go fixture is current
+        working-directory: tests/fixtures-go
+        run: cargo run --quiet --bin cyclonec -- generate --check
+
+      - name: the committed Go fixture builds and vets clean
+        working-directory: tests/fixtures-go
+        run: |
+          test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+          go build ./...
+          go vet ./...
+
+      # Same shape as the Go fixture above: current, and actually buildable.
+      # `cargo test` never invokes the .NET SDK either.
+      - name: the committed C# fixture is current
+        working-directory: tests/fixtures-cs
+        run: cargo run --quiet --bin cyclonec -- generate --check
+
+      - name: the committed C# fixture builds clean
+        working-directory: tests/fixtures-cs
+        run: dotnet build --nologo
+
+      # GDScript has no headless-build story as turnkey as `go build` or
+      # `dotnet build` - there is no official Godot setup action, and this
+      # project would rather not pin CI to an unofficial one un-vetted. So
+      # only the half `cyclonec` itself can verify runs here: the committed
+      # tree is what the generator writes today. Whether it actually compiles
+      # in Godot is unverified by this workflow - open tests/fixtures-gd/ in
+      # the Godot editor to check that by hand.
+      - name: the committed GDScript fixture is current
+        working-directory: tests/fixtures-gd
+        run: cargo run --quiet --bin cyclonec -- generate --check
+
+      # Same shape as the Go and C# fixtures above: current, and actually
+      # buildable - g++ is available on the standard Ubuntu runner image, so
+      # unlike the GDScript backend this one gets a real compile (and a real
+      # run) rather than only a freshness check.
+      - name: the committed C++ fixture is current
+        working-directory: tests/fixtures-cpp
+        run: cargo run --quiet --bin cyclonec -- generate --check
+
+      - name: the committed C++ fixture builds and its smoke test round-trips
+        working-directory: tests/fixtures-cpp
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror \
+            -I . -I include -I src \
+            smoke_test.cpp -o /tmp/cyclone-cpp-smoke-test
+          /tmp/cyclone-cpp-smoke-test
+
+      # gcc is available on the same runner image, so the C backend gets the
+      # same real compile-and-run treatment as C++'s, above.
+      - name: the committed C fixture is current
+        working-directory: tests/fixtures-c
+        run: cargo run --quiet --bin cyclonec -- generate --check
+
+      - name: the committed C fixture builds and its smoke test round-trips
+        working-directory: tests/fixtures-c
+        run: |
+          gcc -std=c99 -Wall -Wextra -Wpedantic -Werror \
+            -I . -I include -I src \
+            smoke_test.c -o /tmp/cyclone-c-smoke-test
+          /tmp/cyclone-c-smoke-test

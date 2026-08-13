@@ -2,41 +2,190 @@
 
 The official Cyclone **source generator**.
 
+```text
+source annotation  →  scanner/parser  →  model discovery  →  codec generation
 ```
-parse  →  collect  →  generate
-```
 
-`cyclonec` is not a compiler. It reads Cyclone attributes out of your sources -
-Rust's `#[network]` / `#[codec(...)]`, C#'s `[Network]` / `[Codec(...)]`, or
-Go's `//cyclone:model` directive and `cyclone:"..."` / `codec:"..."` struct
-tags - and writes **one self-contained file per language**, then exits - the
-way `protoc` does.
-
-Self-contained means what it says: each file carries its language's Cyclone
-runtime (`Writer`, `Reader`, a decode error type, `Limits`) as well as every
-codec. Drop it in and it works. Nothing to import, nothing to add to
-`Cargo.toml`, your `.csproj`, or `go.mod`.
-
-It builds no schema, no IR, no type graph, no codec graph and no dependency
-graph. It runs no semantic analysis and makes no second pass, and there is no
-registry, no reflection and no runtime resolution. The runtime each backend
-emits is a fixed block written once against RFC-0002 and copied out unchanged -
-nothing about the wire format is worked out per model, per field, per run, or
+`cyclonec` is not a compiler and not a runtime. It reads Cyclone attributes out
+of your Rust, Go, C#, GDScript, C++ or C sources - `#[network]` / `#[codec(...)]`,
+Go's `//cyclone:model` directive and struct tags, C#'s `[Network]` /
+`[Codec(...)]` attributes, GDScript's `# cyclone:model` / `# cyclone:TYPE`
+comment directives, or C++/C's shared `CYCLONE_MODEL` / `CYCLONE_CODEC(...)` /
+`CYCLONE_FIELD(TYPE)` macros - and writes the `encode` / `decode` calls that go
+with them, then exits, the way `protoc` does. One run reads one language; a
+project with more than one gets one `cyclone.toml` (and one `--src`/`--out`)
 per language.
 
-Zero dependencies, in the generator and in what it generates. (The Go backend
-uses only `encoding/binary`, `math`, `fmt` and `unicode/utf8` - all standard
-library.)
+What it writes reads and writes **your** types:
 
-## Three syntaxes, one schema
+```rust
+pub fn encode(writer: &mut Writer, value: &Player) {
+    writer.write_u32(value.id);
+    writer.write_f32(value.x);
+}
+```
+
+```go
+func (PlayerEdgeCodec) Encode(w *Writer, value *models.Player) {
+	w.WriteU32(value.ID)
+	w.WriteF32(value.X)
+}
+```
+
+```csharp
+public static void Encode(Writer writer, Models.Player value)
+{
+    writer.WriteU32(value.Id);
+    writer.WriteF32(value.X);
+}
+```
+
+```gdscript
+static func encode(writer: CycloneRuntime.Writer, value: Player) -> void:
+	writer.write_u32(value.id)
+	writer.write_f32(value.x)
+```
+
+```cpp
+static void encode(Writer& writer, const models::Player& value) {
+    writer.write_u32(value.Id);
+    writer.write_f32(value.X);
+}
+```
+
+```c
+static inline bool PlayerEdgeCodec_encode(CycloneWriter *writer, const struct Player *value) {
+    if (!cyclone_writer_write_u32(writer, value->Id)) return false;
+    if (!cyclone_writer_write_f32(writer, value->X)) return false;
+    return true;
+}
+```
+
+No `PlayerDTO`, no `PlayerWire`, no `PlayerMapper`, no runtime mapping layer, no
+registry, no reflection. The bytes in between are RFC-0002's, produced by a
+runtime block that is copied out unchanged rather than derived per model - so
+the generator cannot invent a wire format even in principle.
+
+Zero dependencies, in the generator and in what it generates.
+
+---
+
+## What a run produces
+
+Rust, shown below; Go's, C#'s, GDScript's, C++'s and C's shapes are the same
+idea in each language's own terms - see [Go](#go), [C#](#c), [GDScript](#gdscript),
+[C++](#c-1) and [C](#c-2).
+
+```text
+cyclonec generate --src src --out generated
+```
+
+```text
+src/generated/
+    mod.rs             the module root: declares and re-exports the rest
+    runtime.rs         the RFC-0002 runtime, verbatim
+    handshake.rs       every fingerprint, and the handshake
+    player_edge.rs     one codec, one file
+    player_unity.rs
+.cyclone/
+    schema.json        the schema, as an artifact - commit this
+    build-graph.json   which source produced which file
+```
+
+It is an ordinary Rust module tree - mount it the ordinary way:
+
+```rust
+mod generated;
+use generated::{PlayerEdgeCodec, Reader, Writer};
+```
+
+No crate, nothing to add to `Cargo.toml`: the runtime is the `runtime` module
+inside the tree, and `mod.rs` re-exports it along with every codec.
+
+Each file is a module, so each file imports what it names - including your
+model:
+
+```rust
+use super::runtime::{DecodeError, Reader, Writer};
+use crate::models::player::Player;
+```
+
+Which leaves one thing the generator has to be told rather than assume: **where
+your models live**. It reads that off the source layout, the same way Rust does
+(`src/models/player.rs` is `crate::models::player`), and `model_path` overrides
+it for a project whose modules do not mirror its directories, or one that
+re-exports every model from a single place.
+
+`cyclone.toml` in the project root saves typing the flags; a CLI flag always
+wins over it.
+
+```toml
+src = "src"
+out = "src/generated"
+model_path = "crate::models"    # optional
+```
+
+Your models have to be reachable from the generated module: `pub struct`, with
+the fields the codec touches visible to it.
+
+---
+
+## What it reads
+
+Four markers, and nothing else in your file is inspected. Go has no attributes,
+so the same four things are said with a comment directive and struct tags; C#
+has attributes, so it says them the same way Rust does, just with C#'s own
+syntax for one; GDScript has no attributes either - an unrecognized `@name` is
+a parse error in Godot itself - so, like Go, it says them with a comment
+directive too; C++ and C have no attribute syntax cyclonec can extend either
+(and no comment-directive convention to fall back on the way Go and GDScript
+do), so they say them with three macros a small header defines to expand to
+nothing - the same header, and the same three macros, for both:
+
+| | Rust | Go | C# | GDScript | C++ / C |
+|-|------|----|----|----------|-----|
+| this type is a model | `#[network]` | `//cyclone:model` | `[Network]` | `# cyclone:model` | `CYCLONE_MODEL` |
+| generate these codecs | `#[codec(edge, unity)]` | `//cyclone:model codec=edge,unity` | `[Codec("edge", "unity")]` | `# cyclone:model codec=edge,unity` | `CYCLONE_CODEC("edge", "unity")` |
+| this field's wire type | `#[network(u32)]` | `` `cyclone:"u32"` `` | `[Network("u32")]` | `# cyclone:u32` | `CYCLONE_FIELD(u32)` |
+| this field's codecs | `#[codec(edge)]` | `` `codec:"edge"` `` | `[Codec("edge")]` | `# cyclone:u32 codec=edge` | `CYCLONE_CODEC("edge")` |
 
 ```rust
 #[network]
 #[codec(edge, unity)]
-struct DeviceState {
+pub struct DeviceState {
     #[network(u32)]
     #[codec(edge, unity)]
-    id: u32,
+    pub id: u32,
+
+    #[network(f32)]
+    #[codec(edge)]
+    pub temperature: f32,
+
+    #[network(string)]
+    #[codec(unity)]
+    pub display_name: String,
+
+    /// A network field in no codec: written by none of them.
+    #[network(u32)]
+    pub unrouted: u32,
+
+    /// Not on the wire at all.
+    pub cache: String,
+}
+```
+
+```go
+//cyclone:model codec=edge,unity
+type DeviceState struct {
+	ID          uint32 `cyclone:"u32" codec:"edge,unity"`
+	Temperature float32 `cyclone:"f32" codec:"edge"`
+	DisplayName string `cyclone:"string" codec:"unity"`
+
+	// A network field in no codec: written by none of them.
+	Unrouted uint32 `cyclone:"u32"`
+
+	// Not on the wire at all.
+	Cache string
 }
 ```
 
@@ -48,355 +197,765 @@ public class DeviceState
     [Network("u32")]
     [Codec("edge", "unity")]
     public uint Id { get; set; }
+
+    [Network("f32")]
+    [Codec("edge")]
+    public float Temperature { get; set; }
+
+    [Network("string")]
+    [Codec("unity")]
+    public string DisplayName { get; set; }
+
+    /// A network field in no codec: written by none of them.
+    [Network("u32")]
+    public uint Unrouted { get; set; }
+
+    /// Not on the wire at all.
+    public string Cache { get; set; }
 }
 ```
 
-```go
-//cyclone:model codec=edge,unity
-type DeviceState struct {
-    ID uint32 `cyclone:"u32" codec:"edge,unity"`
-}
+```gdscript
+# cyclone:model codec=edge,unity
+class_name DeviceState
+
+# cyclone:u32 codec=edge,unity
+var id: int = 0
+
+# cyclone:f32 codec=edge
+var temperature: float = 0.0
+
+# cyclone:string codec=unity
+var display_name: String = ""
+
+# A network field in no codec: written by none of them.
+# cyclone:u32
+var unrouted: int = 0
+
+# Not on the wire at all.
+var cache: String = ""
 ```
 
-All three produce `DeviceStateEdgeCodec` and `DeviceStateUnityCodec`, all three
-route `id`/`Id`/`ID` into each, and all three write the identical four Little
-Endian bytes for it. The three source languages are read by independent
-scanners into one shared shape (`Model` / `Field` - see
-[`src/model.rs`](src/model.rs)), so a schema means the same thing whichever
-syntax it was written in: same codec names, same field routing, same bytes.
-What differs between the three outputs is only the syntax and the runtime
-method names - never the wire format.
+```cpp
+CYCLONE_MODEL
+CYCLONE_CODEC("edge", "unity")
+struct DeviceState
+{
+    CYCLONE_FIELD(u32)
+    CYCLONE_CODEC("edge", "unity")
+    uint32_t Id = 0;
 
-## Usage
+    CYCLONE_FIELD(f32)
+    CYCLONE_CODEC("edge")
+    float Temperature = 0.0f;
 
-```
-cyclonec --out <PATH> [OPTIONS] <PATH>...
-```
+    CYCLONE_FIELD(string)
+    CYCLONE_CODEC("unity")
+    std::string DisplayName;
 
-| Option | Effect |
-|--------|--------|
-| `-o, --out <PATH>` | **required** - where the generated file(s) go |
-| `--check` | report an out-of-date output file, write nothing, exit 1 if stale |
-| `--stdout` | print instead of writing; replaces `--out` rather than joining it |
-| `-q, --quiet` | report only errors |
-| `-h, --help` / `-V, --version` | |
+    // A network field in no codec: written by none of them.
+    CYCLONE_FIELD(u32)
+    uint32_t Unrouted = 0;
 
-A directory is searched recursively for `.rs`, `.cs` **and** `.go` files,
-skipping `target` and the generator's own output. Each file's extension picks
-its scanner; nothing else about it is inspected to decide.
-
-`--out` decides the destination by its own extension, not by what already
-exists on disk, so a first run and a second run agree:
-
-| `--out` | Rust goes to | C# goes to | Go goes to |
-|---------|---------------|------------|------------|
-| `src/` | `src/cyclone.codec.rs` | `src/cyclone.codec.cs` | `src/cyclone.codec.go` |
-| `src/net.rs` | `src/net.rs`, exactly | `src/net.cs` (if C# models exist) | `src/net.go` (if Go models exist) |
-| `src/net.go` | `src/net.rs` (if Rust models exist) | `src/net.cs` (if C# models exist) | `src/net.go`, exactly |
-
-Any of the three is written only if that language actually has a model that
-declared a codec - a Rust-only project never sees a `.cs` or `.go` file appear.
-
-```
-cyclonec --out src/ src/                 # a whole tree, split by language
-cyclonec --out src/net.rs src/models.rs  # one named Rust file
-cyclonec --out src/net.go src/models.go  # one named Go file
-cyclonec --check --out src/ src/         # CI: fail if any is out of date
+    // Not on the wire at all.
+    std::string Cache;
+};
 ```
 
-`--out` is required on purpose: the output is one file per language holding a
-whole project's codecs, and guessing where that belongs is not the generator's
-call. There is deliberately **no `--codec` flag** either - a model declares its
-codecs in the source, and asking again on the command line could only ever
-disagree.
+```c
+CYCLONE_MODEL
+CYCLONE_CODEC("edge", "unity")
+struct DeviceState
+{
+    CYCLONE_FIELD(u32)
+    CYCLONE_CODEC("edge", "unity")
+    uint32_t Id;
 
-## What it reads
+    CYCLONE_FIELD(f32)
+    CYCLONE_CODEC("edge")
+    float Temperature;
 
-Four markers per language, matched in meaning:
+    CYCLONE_FIELD(string)
+    CYCLONE_CODEC("unity")
+    const char *DisplayName;
 
-| | Rust | C# | Go |
-|-|------|-----|-----|
-| this type is a model | `#[network]` | `[Network]` | `//cyclone:model` |
-| generate these codecs | `#[codec(edge, unity)]` | `[Codec("edge", "unity")]` | `//cyclone:model codec=edge,unity` |
-| this field's wire type | `#[network(u32)]` | `[Network("u32")]` | `` `cyclone:"u32"` `` |
-| this field's codecs | `#[codec(edge)]` | `[Codec("edge")]` | `` `codec:"edge"` `` |
+    // A network field in no codec: written by none of them.
+    CYCLONE_FIELD(u32)
+    uint32_t Unrouted;
 
-The C# attributes come from [`cyclone-attributes`](../cyclone-attributes-csharp)
-(namespace `Cyclone`). Go has no attribute mechanism, so its model marker and
-its codec list share one comment directive:
-
-```go
-//cyclone:model codec=edge,unity
-type DeviceState struct {
-    ID          uint32  `cyclone:"u32" codec:"edge,unity"`
-    Temperature float32 `cyclone:"f32" codec:"edge"`
-    Name        string  `cyclone:"string" codec:"unity"`
-}
+    // Not on the wire at all.
+    int Cache;
+};
 ```
 
-generates exactly two codecs - `DeviceStateEdgeCodec` (`ID`, `Temperature`) and
-`DeviceStateUnityCodec` (`ID`, `Name`) - never a third, never one fewer. The
-Rust and C# spellings of the same model generate the identical two.
+All six generate exactly two codecs - `…EdgeCodec` (`id`/`ID`/`Id`,
+`temperature`) and `…UnityCodec` (`id`/`ID`/`Id`, `display_name`) - never a
+third, never one fewer.
 
-**The wire type is never inferred from the host type**, in any of the three.
-`` `cyclone:"u32"` `` on a `uint64` field is a `u32` on the wire - four bytes,
-Little Endian - exactly as `#[network(u32)] value: u64` is in Rust and
-`[Network("u32")] public ulong Value` is in C#. Whether the host language
-accepts the resulting call (`w.WriteU32(value.ID)` with `ID` a `uint64`) is
-that language's compiler's question, not this generator's.
+**The wire type is never inferred from the host type.** `#[network(u32)]` (or
+`` cyclone:"u32" ``) on a wider field is still four bytes, Little Endian.
+Whether the host language accepts the resulting call is the host compiler's
+question, not this generator's.
 
-### The one thing Go requires that the others don't
+Each scanner is a lexer, not a parser for its language: it knows no types,
+traits, generics, modules or packages. The one thing it must get right is
+*where* a token is - a `#[` inside a string, or a `struct`/`type` inside a
+comment, is not source.
 
-A `//cyclone:model` directive is a comment - nothing in the language ties it to
-the declaration after it the way an attribute is tied to what it decorates. So
-`cyclonec` checks: the very next thing after the directive must be
-`type Name struct { ... }`, or it is a reported error, never a silent skip
-(h.md §12). A directive on a `type Count int`, or one followed by a `func`, or
-one at the end of a file, all fail loudly rather than vanishing.
+`cyclonec` only *reads* those markers; the host compiler still has to accept
+them. In Rust that means your crate needs `#[network]`/`#[codec]` defined - the
+[`cyclone-attributes`](https://crates.io/crates/cyclone-attributes) crate, or
+your own no-op equivalents (a dependency of your models, not of the generated
+code: what `cyclonec` writes still depends on nothing). Go needs nothing extra
+at all - a comment and a struct tag are already valid Go with no meaning to the
+compiler until `cyclonec` reads them. C# needs a small `Network`/`Codec`
+attribute pair defined somewhere your models can see - a few lines, no
+dependency of their own - the same role `cyclone-attributes` plays for Rust.
+GDScript needs nothing extra either, for the same reason Go doesn't: a
+`# cyclone:` comment is already valid GDScript with no meaning to Godot's own
+compiler until `cyclonec` reads it. C++ and C both need the same small header
+defining `CYCLONE_MODEL`, `CYCLONE_FIELD` and `CYCLONE_CODEC` to expand to
+nothing - again a dependency of your models, never of the generated code, and
+the one file the two backends actually share.
 
-Similarly, a field tagged `` `codec:"edge"` `` with no `` `cyclone:"..."` ``
-tag at all is an error - the Go counterpart of Rust's "field requires a
-network type" and C#'s "field requires a wire type" - rather than being
-silently dropped, since a field that named a codec was clearly meant to be on
-the wire.
+---
 
-## What it writes
+## Go
+
+Go compiles by *package*, not by file, so the Go backend differs from the Rust
+one in three ways:
+
+- **No module root.** Every file `cyclonec` writes for one run shares a single
+  `package` clause (derived from `--out`'s own directory name), so there is
+  nothing to declare and nothing to re-export - a codec is reached the ordinary
+  way, `generated.PlayerEdgeCodec{}`.
+- **Import paths, not module paths.** A codec has to `import` the package your
+  models live in. By default that is computed from the nearest `go.mod`'s
+  `module` line plus the model source's own directory - `go.mod` therefore has
+  to sit at the project root, next to `cyclone.toml`. `--model-path` overrides
+  it (an import path, e.g. `github.com/acme/game/internal/models`, not a Rust
+  module path) for a layout that does not fit that assumption.
+- **`error`, not `Result`.** `Decode` returns `error` and every read is
+  followed by an explicit check, the shape Go itself asks for; the RFC-0002
+  §9.1 policy is identical - `r.FieldAbsent()` at every field boundary, `error`
+  only for a field that started and ran out.
+
+`Array<Array<T>>` is refused with a clear error rather than generated wrong -
+the one thing the Go backend does not yet support. Flatten the field, or split
+it into two codecs.
+
+---
+
+## C#
+
+C# compiles by *project*, not by file or by package, so the C# backend differs
+from both of the others:
+
+- **No `import`, ever.** A fully-qualified reference (`Models.Player`)
+  compiles without a `using` directive, so a generated codec never writes one
+  - it spells a cross-namespace reference out in full, and a bare reference
+  whenever the model shares this run's namespace (derived from `--out`'s own
+  directory name, PascalCased) or has no namespace at all.
+- **`namespace`, not an import path.** Where each model lives is read from the
+  `namespace` its own source declares (or no namespace, C#'s global one, which
+  is a valid answer) - `--model-path` overrides every model at once with a
+  namespace of your choosing, the same role it plays for Go's import path.
+- **Exceptions, not `Result`/`error`.** `Decode` takes `ref Reader` and throws
+  `DecodeException` on failure; the RFC-0002 §9.1 policy is identical -
+  `reader.FieldAbsent()` at every field boundary, throwing only for a field
+  that started and ran out.
+- **A local, not a borrow, for a nested model.** A C# property cannot be
+  passed `ref` directly, so a nested model field is decoded through a local:
+  read the existing value out, decode into it by `ref`, assign it back. This
+  needs the field to already hold an instance before `Decode` runs (a property
+  initializer, `= new();`, is enough) - the same requirement Rust's version
+  has, enforced by the language there and by the caller here.
+
+`Array<Array<T>>` is refused for the same reason it is in Go: flatten the
+field, or split it into two codecs.
+
+---
+
+## GDScript
+
+GDScript compiles by *file*, and a `.gd` file gets exactly one globally
+reachable name: whatever it declares with `class_name`. That single fact
+shapes the whole backend, and turns out to fit this project's "one file per
+model per codec" layout better than `cyclonec_old`'s one shared file ever
+could:
+
+- **No `import`, and no shared wrapper.** Every codec file declares its own
+  `class_name` - `PlayerEdgeCodec`, say - and Godot makes it reachable
+  project-wide with nothing to `preload`. A model reference is always bare:
+  there is no namespace, no package and nothing to qualify, so unlike Go and
+  C# this backend has no `Imports` concept at all. `--model-path` has no
+  effect here, because there is nothing for it to override.
+- **`static func`, not an instance method.** `encode` and `decode` are called
+  directly - `PlayerEdgeCodec.encode(writer, value)` - with nothing to
+  `.new()`. (`cyclonec_old` instantiated every codec instead, to avoid an
+  unresolved question about `static func` *inside a nested class*; that
+  question doesn't apply once a codec is its own top-level file.)
+- **`[value, error]`, not `Result`/exceptions.** GDScript has no
+  `try`/`catch`, so every `Reader` read returns a 2-element `Array` instead of
+  throwing or returning `Result`, and `decode` returns a `DecodeError` (or
+  `null`, on success) rather than throwing one - the same explicit-check shape
+  Go's `error` return already gives this project. The RFC-0002 §9.1 policy is
+  identical: `reader.field_absent()` at every field boundary, an error only
+  for a field that started and ran out.
+- **A signed 64-bit `int`, and no `u64`.** A fingerprint is an opaque 64-bit
+  bit pattern, and GDScript's only integer type is signed - so every
+  fingerprint constant is built from two 32-bit halves shifted and combined,
+  rather than risking a bare 16-digit hex literal a signed parser was never
+  asked to handle.
+
+`Array<Array<T>>` is refused for the same reason it is in Go and C#: flatten
+the field, or split it into two codecs. And unlike the other three backends,
+this one cannot be compiled or run in this project's own CI - there is no
+official headless Godot GitHub Action to build against, so only the half
+`cyclonec` itself can verify (parsing, generation, `--check`) is checked
+automatically; open `tests/fixtures-gd/` in the Godot editor to check the rest
+by hand.
+
+---
+
+## C++
+
+C++ compiles by *translation unit*, not by package or by project, and this
+backend is header-only for exactly that reason: every method a generated
+`struct` declares is defined inside the struct body, which makes it
+implicitly `inline` and safe to `#include` from as many `.cpp` files as a
+project likes, with no separate compilation unit to add to a build.
+
+- **A physical `#include`, not only a name in scope.** Unlike C#'s "a
+  fully-qualified name compiles with no `using`" or Go's "one `import` reaches
+  a whole package", a C++ codec needs the header that declares its model
+  named explicitly. That path is always the model's own source path exactly
+  as `--src` found it (e.g. `src/models/player.hpp`) - point your compiler's
+  `-I` at whatever directory that path is itself relative to (typically the
+  project root) and it resolves. `--model-path` overrides the *namespace* a
+  model is qualified with, the same as it does for C#, but never this path:
+  the physical header a build needs is not something a logical override can
+  change.
+- **Always a leading `::`.** A namespaced model is spelled
+  `::Game::Models::Player`, always fully qualified from the global namespace -
+  never bare-if-same-namespace the way Go's and C#'s `qualify` have to be.
+  C++ has no rule against a self-referential qualified name, so there is no
+  "is this the same namespace as the one this file opens" case to get right,
+  and [`generator::cpp`](src/generator/cpp.rs) tracks no "own namespace" at
+  all.
+- **A `DecodeError` return, not an exception.** A generated model's fields are
+  plain public members, never properties, so - unlike C# - a nested model's
+  field is always addressable and passed by reference directly, with none of
+  C#'s `var local = value.Field; …; value.Field = local;` workaround needed.
+  And rather than throw the way C#'s runtime does, every `Reader` read takes
+  its result by output reference and returns a `DecodeError` - a
+  default-constructed one *is* "no error" - so a project built with
+  exceptions off (`-fno-exceptions`, common in game and embedded C++) can
+  still call it. The RFC-0002 §9.1 policy is identical:
+  `reader.field_absent()` at every field boundary, an error only for a field
+  that started and ran out.
+- **No 64-bit workaround needed.** Unlike GDScript, C++'s `std::uint64_t` is
+  exact and unsigned, and an unsuffixed hex literal too wide for `int`/`long`
+  is promoted to `unsigned long long` by the language itself - so a
+  fingerprint is written as a plain `0x…ULL` literal, no splitting required.
+
+`Array<Array<T>>` is refused for the same reason it is in Go, C# and GDScript:
+flatten the field, or split it into two codecs. Unlike GDScript, this backend
+*is* compiled - and its generated tree actually run, round-tripping a real
+payload - in this project's own CI: g++ ships on the standard runner image, so
+`tests/fixtures-cpp/` gets the same rigor `tests/generated.rs` gives the Rust
+tree, via a small hand-written smoke test (`tests/fixtures-cpp/smoke_test.cpp`)
+rather than a second Rust integration test. Generated code targets C++17 (for
+`inline` namespace-scope constants in `handshake.hpp`) and nothing later.
+
+---
+
+## C
+
+Plain C reads the same `CYCLONE_MODEL`/`CYCLONE_CODEC`/`CYCLONE_FIELD` markers,
+from the same header, as C++ - but has none of C++'s classes, namespaces,
+references, exceptions or growable containers, so this backend's generated
+shape departs from C++'s in every place those are what C++ leaned on:
+
+- **Free functions, not static methods.** Where C++ writes `struct
+  PlayerEdgeCodec { static bool encode(...); };`, C writes two ordinary
+  functions, `PlayerEdgeCodec_encode` and `PlayerEdgeCodec_decode` - both
+  `static inline`, the same header-only, multi-translation-unit-safe shape
+  every function this backend generates has (including the runtime's own).
+- **`struct Name`, always - never bare `Name`.** The brief's own `DeviceState`
+  example above declares a plain tagged `struct DeviceState { ... };`, no
+  `typedef` - so bare `DeviceState` is not a C type at all, only `struct
+  DeviceState` is. Every generated reference to a model spells it that way,
+  which compiles whether or not your project *also* writes a `typedef struct
+  DeviceState DeviceState;` alongside it.
+- **No namespace, so nothing for `--model-path` to override.** A model's type
+  is reached by the same physical `#include` C++ needs (always the model's own
+  source path, e.g. `src/models/player.h` - point your compiler's `-I` at
+  whatever it's relative to) and nothing else: there is no logical
+  qualification step at all, so unlike C++ this backend has no `Imports`
+  concept beyond that one `#include` lookup, and `--model-path` has no effect
+  on it, the same as GDScript.
+- **`CycloneDecodeError` returned by value, and `bool` for a fallible write.**
+  Every `Reader` read takes its result by output pointer and returns a
+  `CycloneDecodeError` (a zero-initialized one *is* "no error"), the same
+  no-exceptions shape C++ uses. Encoding can fail too, though - `malloc`
+  clearly indicates failure through `NULL`, and C has no `std::vector` whose
+  reallocation just throws - so every generated `_encode` and every
+  `CycloneWriter` method returns `bool`, checked the same way a decode error
+  is: `if (!cyclone_writer_write_u32(writer, value->Id)) return false;`.
+- **`string`/`bytes`/`Array<T>` fields are heap-owned, and you free them.** A
+  `string` field's host type is always `const char *`, heap-allocated by
+  decode and released by `free()`; `bytes` decodes into a `CycloneBytes {
+  data, len }`; `Array<T>` decodes into a generated `CycloneArray_T { items,
+  count }` - one small owned type per *distinct* `T` the schema actually
+  uses, written once into a shared `arrays.h`, since C has no generic
+  container to reach for. Every model gets one more generated file,
+  `<model>_cyclone.h`, carrying a single `<Model>_free` that walks every
+  field any of that model's codecs ever decodes and releases what it owns -
+  call it exactly once per decoded value, and only ever decode into a struct
+  that is freshly zero-initialized or freshly freed (decode does not free
+  what a field already held before writing over it - see `runtime.h`'s
+  module docs for why that would be its own bug).
+
+`Array<Array<T>>` is refused for the same reason it is everywhere but Rust:
+flatten the field, or split it into two codecs. Like C++, this backend *is*
+compiled and run in this project's own CI - gcc ships on the same runner image
+- via a small hand-written smoke test (`tests/fixtures-c/smoke_test.c`).
+Generated code targets C99 (for `//` comments, `inline`, mixed declarations,
+and compound literals) and nothing later.
+
+---
+
+## Decoding, and version skew
+
+RFC-0002 §9.1 says a byte stream that ends **exactly on a field boundary** is
+valid: the writer was running an older model, and the reader's remaining fields
+are simply absent. A stream that ends **inside** a field is a truncated packet
+and must be an error.
+
+Telling those apart is the whole of it, and the generated decoder asks one
+question per field:
 
 ```rust
-/// The `edge` codec for [`DeviceState`], generated from its Cyclone attributes.
-pub struct DeviceStateEdgeCodec;
+value.level = if reader.field_absent() { 0u32 } else { reader.read_u32()? };
+```
 
-impl DeviceStateEdgeCodec {
-    pub fn encode(writer: &mut Writer, value: &DeviceState) {
-        writer.write_u32(value.id);
-    }
+| the stream | the field | result |
+|---|---|---|
+| ends before the field starts | absent | zero, and so is every field after it |
+| ends two bytes into a `u32` | truncated | `DecodeError::UnexpectedEof` |
+| has bytes left after the last field | a newer writer's | ignored |
 
-    pub fn decode(reader: &mut Reader, value: &mut DeviceState) -> Result<(), DecodeError> {
-        value.id = reader.read_u32()?;
-        Ok(())
-    }
+A partial field is **never** treated as a zero. Packet corruption that decodes to
+a plausible value is worse than packet corruption that fails.
+
+Array *elements* are read strictly: a count of 3 promised three elements, so a
+stream that ends after two is a truncated array, not skew.
+
+A nested model follows the same rule at its own level, without any code of its
+own - its codec asks the same question of each of its own fields.
+
+> `cyclonec_old` could not do this: every read returned `UnexpectedEof`, so
+> version skew failed in both directions. See [MIGRATION.md](MIGRATION.md) §1.1.
+
+---
+
+## Fingerprints
+
+Every message - a model rendered by one codec - has a fingerprint: SHA-256 over
+a fully specified canonical text, so that Rust, Go, C#, C++ and C produce the
+same 32 bytes from the same schema. `handshake.rs` publishes them:
+
+```rust
+pub const CYCLONE_SCHEMA_FINGERPRINT: u64 = 0x6D1B58906FA09FFA;
+
+pub const PLAYER_FINGERPRINT: u64 = 0xB1C59A2609840A9F;
+pub const PLAYER_EDGE_MESSAGE_ID: u32 = 0x432AB486;
+pub const PLAYER_EDGE_FINGERPRINT: u64 = 0x231DD2D8744FECC3;
+```
+
+Generated, never hand-maintained: a constant a human keeps in step with a schema
+is one commit away from being wrong, and a wrong fingerprint says *current*
+about two peers that disagree.
+
+A fingerprint answers **same or different**, and nothing else. It changes for
+every change in the table in [SPEC-FINGERPRINT.md](SPEC-FINGERPRINT.md) §6 -
+including two same-typed fields being swapped, which is why field names are part
+of the canonical input. That document is normative and explains the trade-off in
+full.
+
+A message **id** is derived from the message name alone, so appending a field
+does not renumber it: a peer can still say *which* message it means while
+disagreeing about its shape.
+
+---
+
+## Handshake
+
+```text
+Client  ──  CYCLONE_SCHEMA_FINGERPRINT  ──▶  Server
+```
+
+| | |
+|---|---|
+| the same schema fingerprint | `CURRENT`, accept |
+| a message both ends know, with different fingerprints | `REJECT`, disconnect |
+| otherwise - each end knows messages the other does not | `OUTDATED`, accept |
+
+```rust
+match cyclone_handshake(peer_schema_fingerprint, peer_messages) {
+    CycloneHandshake::Current => accept(),
+    CycloneHandshake::Outdated => accept(),   // one side is behind, safely
+    CycloneHandshake::Reject => disconnect(),
 }
 ```
 
-```csharp
-public static class DeviceStateEdgeCodec
+`peer_messages` is the peer's `(id, fingerprint)` table - what `CYCLONE_MESSAGES`
+is on this side. **No schema crosses the network.** Both ends have theirs
+compiled in, and sending one would invite a peer to interpret it, which is the
+runtime schema resolution Cyclone exists to not have.
+
+The middle rule is the safety property, and it is the most a runtime can know:
+two peers that both speak `Player.edge` and disagree about its bytes must not
+exchange it. *How* they disagree is a build-time question, answered from two
+schemas by `cyclonec compat`.
+
+No frame carries a fingerprint by default - the wire's premise is that there is
+no metadata on it. A project that wants per-frame validation can turn it on:
+
+```toml
+validate_message_fingerprint = true
+```
+
+and every frame gains `[MessageId: u32][MessageFingerprint: u64]` in front of
+its payload, with `cyclone_write_envelope` / `cyclone_read_envelope` generated to
+match.
+
+---
+
+## Schema evolution
+
+`.cyclone/schema.json` is the schema as an artifact: for inspecting a build, for
+`cyclone-inspect`, for CI, and as the baseline the next change is compared
+against. **It is never a runtime dependency, and never an input to generation.**
+Every run re-derives the schema from source; the file on disk is the previous
+answer, kept so the new one can be compared against it.
+
+```text
+Source Model
+      ↓
+Scanner / Parser
+      ↓
+Cyclone IR  ────┬───────────────→ generated codec
+                ├───────────────→ schema.json
+                ├───────────────→ fingerprints
+                └───────────────→ build-graph
+```
+
+### What counts as breaking
+
+| Change | Verdict |
+|---|---|
+| nothing changed | `CURRENT` |
+| a field appended at the end | `COMPATIBLE` |
+| a field removed, from anywhere | `BREAKING` |
+| a field inserted in the middle | `BREAKING` |
+| fields reordered | `BREAKING` |
+| a field's wire type changed | `BREAKING` |
+| a field renamed, nothing else | `BREAKING` - the bytes are unchanged, the fingerprint is not |
+| a whole message added | `COMPATIBLE` |
+| a whole message removed | `BREAKING` |
+
+The fingerprint is not asked which of these it was - it has no structure to
+infer from. When two fingerprints differ, the checker compares the two schemas
+field by field and says exactly what moved:
+
+```text
+⚠ Player.edge:
+  field[1]:
+    old: x:f32
+    new: y:f32
+  BREAKING: field order changed
+```
+
+```text
+⚠ Player.edge:
+  + level:u32 at index 3
+  COMPATIBLE: append-only fields (1 appended at the end)
+```
+
+### Locally: a warning, never a failure
+
+`cyclonec generate` prints the report and generates anyway. Breaking a schema on
+a branch is a decision a developer is allowed to make, and a generator that
+refused would only teach them to pass a flag that turns the check off for good.
+
+### In CI: an error
+
+```bash
+cyclonec ci --base-ref "origin/${GITHUB_BASE_REF}"
+```
+
+1. `.cyclone/schema.json` still matches this branch's source - otherwise every
+   comparison after it is against fiction;
+2. the **target branch's** `schema.json`, read out of git rather than the working
+   tree;
+3. the two compared: `BREAKING` is exit 1, `CURRENT` / `COMPATIBLE` is exit 0.
+
+The baseline is always given and never defaulted. A baseline hard-coded to
+`main` in a repository that merges into `develop` produces a green check that
+compared a branch against itself. See
+[`.github/workflows/schema.yml`](.github/workflows/schema.yml).
+
+---
+
+## cyclone-inspect
+
+```bash
+cyclone-inspect --schema .cyclone/schema.json --message Player --file packet.bin
+cyclone-inspect --schema .cyclone/schema.json --message Player.edge --hex '64000000 00002841 0000a041'
+```
+
+```text
+Player.edge
+fingerprint: sha256:231dd2d8744fecc3198c9853ffafe18023c93670fe7822c4cd9638fe9eabbe8b (0x231DD2D8744FECC3)
+message id : 0x432AB486
+payload    : 12 bytes
+----------------------------------------------------
+id      : u32 = 100
+          offset: 0
+          bytes: 64 00 00 00
+
+x       : f32 = 10.5
+          offset: 4
+          bytes: 00 00 28 41
+```
+
+The schema is **named, never guessed**. There is no tag, no id and no length in
+front of a Cyclone payload to infer a message from, and a plausible-looking
+wrong answer is worse than no answer. `--expect <sha256:… | 0x…>` fails unless
+the message's fingerprint is the one you expected, so a packet captured from one
+build cannot be quietly read through another.
+
+It decodes by exactly the rules a generated decoder follows: an absent field is
+reported as absent, a truncated field is an error, and trailing bytes are
+reported as a newer writer's.
+
+---
+
+## The build graph
+
+`.cyclone/build-graph.json` maps each source to what was generated from it, with
+the message fingerprint and the SHA-256 of the bytes written:
+
+```json
 {
-    public static void Encode(Writer writer, DeviceState value)
-    {
-        writer.WriteUInt32(value.Id);
+  "sources": {
+    "src/models/player.rs": {
+      "models": ["Player", "PlayerInfo"],
+      "outputs": [
+        {
+          "path": "src/generated/player_edge.rs",
+          "model": "Player",
+          "codec": "edge",
+          "fingerprint": "sha256:231dd2…",
+          "sha256": "9f1e35…"
+        }
+      ]
     }
-
-    public static void Decode(ref Reader reader, ref DeviceState value)
-    {
-        value.Id = reader.ReadUInt32();
-    }
+  }
 }
 ```
 
-```go
-type DeviceStateEdgeCodec struct{}
+It answers two questions nothing else can: *where did this file come from* (even
+after its source was deleted) and *is this file stale* (a digest that no longer
+matches means somebody edited it by hand, and the header did say not to). It is
+also how `cyclonec generate` knows to delete the codec of a model you removed.
 
-func (DeviceStateEdgeCodec) Encode(w *Writer, value *DeviceState) {
-	w.WriteU32(value.ID)
-}
+---
 
-func (DeviceStateEdgeCodec) Decode(r *Reader, value *DeviceState) error {
-	var err error
-	value.ID, err = r.ReadU32()
-	if err != nil {
-		return err
-	}
-	return nil
-}
+## Commands
+
+```text
+cyclonec generate [--src <PATH>]... [--out <PATH>] [--model-path <PATH>] [--check] [-q]
+cyclonec compat --base <SCHEMA> [--head <SCHEMA>]
+cyclonec ci --base-ref <REF>
+cyclone-inspect --schema <SCHEMA> --message <NAME> (--file <PATH> | --hex <HEX>)
 ```
 
-`decode`/`Decode` fills only the fields its codec carries, leaving the rest as
-they were - what lets one model be split across several codecs, on all three
-sides. Go has no exceptions, so it is the one language where this is spelled
-out explicitly: every read is followed by its own `if err != nil { return err
-}`, the shape h.md §10 itself specifies.
+| | |
+|---|---|
+| `generate` | read source, report what changed, write the tree |
+| `generate --check` | write nothing; exit 1 if anything on disk is out of date |
+| `compat` | compare a base schema against the current source, or against `--head`; exit 1 on `BREAKING` |
+| `ci` | verify, fetch the target branch's schema, compare, exit 1 on `BREAKING` |
 
-(C#'s `Reader` is a `ref struct`, so both it and the model are threaded through
-by `ref`; a nested model field, which C# cannot pass a property by `ref` into
-directly, is decoded through a local instead. Go needs no such workaround - a
-struct field reached through a pointer is directly addressable, so
-`&value.Info` works exactly like Rust's `&mut value.info`. See the header of
-[`src/generator/csharp.rs`](src/generator/csharp.rs) for the C# case in full.)
+There is deliberately no `--codec` flag: a model declares its codecs in the
+source, and asking again on the command line could only ever disagree.
 
-Above the codecs, the same file carries the runtime they call - `Writer`,
-`Reader`, a decode error type, `Limits`, one method per Cyclone primitive. That
-block is identical in every file of its language `cyclonec` writes. It is not
-generated from your models - it is a constant per language, written once
-against RFC-0002 ([`rust_runtime.rs`](src/generator/rust_runtime.rs),
-[`csharp_runtime.rs`](src/generator/csharp_runtime.rs),
-[`go_runtime.rs`](src/generator/go_runtime.rs)). §10/§6 forbid the generator
-from working out byte layout, and it does not: it only knows how to copy these
-out.
-
-Rust names its models unqualified and needs an `include!`. C# needs nothing at
-all - add the file to your project and it compiles. **Go needs its `package`
-line to match**: Go compiles by directory, not by file, so the generated file
-declares whichever `package` the first Go source `cyclonec` read declared, and
-belongs beside it in the same directory.
-
-### Three rules, and no fourth, on every backend
-
-| Network type | Rust | C# | Go |
-|--------------|------|-----|-----|
-| a primitive | `writer.write_u32(value.id)` | `writer.WriteUInt32(value.Id)` | `w.WriteU32(value.ID)` |
-| a model | `PlayerInfoEdgeCodec::encode(writer, &value.info)` | `PlayerInfoEdgeCodec.Encode(writer, value.Info)` | `(PlayerInfoEdgeCodec{}).Encode(w, &value.Info)` |
-| a field in no codec | nothing, by any codec | nothing, by any codec | nothing, by any codec |
-
-**No byte layout is derived**, in any backend. Endianness, length prefixes and
-string encoding live in the carried runtime block, not in anything the
-generator computes. Deriving them per model - or per language - is how two
-implementations of one wire format start disagreeing, and this is a hard
-requirement: the same schema must produce the same bytes in Rust, C#, Go, or
-any future backend.
-
-**Nothing is generated that is reached at runtime.** No `encoded_size`, no
-`CodecRegistry`, no `GetCodec`, no type id, no `interface{}` dispatch, no
-reflection. A codec is a name known at compile time, and the caller names it
-directly.
-
-## What it validates
-
-Per-language parse errors - one that every backend shares, and one that is
-Go's alone:
-
-```
-error: player.rs:5: #[network] field requires a network type
-error: Player.cs:5: [Network] field requires a wire type: [Network("...")]
-error: player.go:5: field 'ID' is missing cyclone wire type
-error: player.go:3: //cyclone:model must be immediately followed by a `type Name struct { ... }` declaration
-```
-
-And one check that runs across a whole language's models after parsing, before
-anything is rendered: a field naming a nested model carries its own codec
-membership into the nested call (`Player.info` routed into `edge` makes
-`PlayerEdgeCodec` call `PlayerInfoEdgeCodec`), and that call only makes sense if
-the referenced model actually declares that codec. If it does not -
-`PlayerInfo` never declared `orange_pi`, but `Player.info` routed into it
-anyway - `cyclonec` reports it immediately:
-
-```
-error: model 'Player' field 'info' routes into codec 'orange_pi', but the model
-it references, 'PlayerInfo', declares only: edge, unity - 'PlayerInfoOrangePiCodec'
-would never be generated
-```
-
-This is the one validation that spans more than one model, and it is the same
-check for all three languages - [`model::check_nested_codecs`](src/model.rs)
-reads only the shared `Model` / `Field` shape, so it needed writing once. It
-only fires for a model *this run parsed*; a field naming a type from elsewhere
-(hand-written, another package) is unaffected - that resolution is still left
-to the host compiler, same as ever.
-
-Everything else is the host compiler's. A field declared with a mismatched
-native type is generated as its declared wire type without comment; a call to
-a codec this run never heard of at all is spelled and left for `rustc`, the C#
-compiler, or `go build` to name. `cyclonec` does not become a second compiler
-for any of the three.
-
-## Reading, not parsing
-
-None of the three scanners is a parser for its language. None knows types,
-traits, generics, namespaces, or any other semantic of Rust, C# or Go - the
-host compiler already does, and running a second copy of it to find a handful
-of markers would be the slowest possible way to answer the smallest possible
-question. (h.md §11 suggests Go's own `go/parser` and `go/ast`; a fourth
-dependency to reach the same four facts the other two scanners already reach
-by hand would be inconsistent with that stance and with "chỉ đọc, không
-compile" - so Go gets the same hand-rolled lexer treatment Rust and C# already
-have.)
-
-The one thing each must get right is *where a token is*: a `[Network]` (or
-`#[network]`, or `//cyclone:model`) inside a string, or `class`/`struct`
-inside a comment, must not be mistaken for source. That is the only reason
-each is a lexer and not a substring search, and all three are tested as such.
-
-Go's lexer carries one more responsibility the other two don't: it must tell
-its one *significant* comment (`//cyclone:model ...`) apart from the countless
-ordinary ones sitting right next to it in the same syntax, rather than
-discarding every comment as noise the way Rust's and C#'s lexers do.
+---
 
 ## Layout
 
-```
+```text
 cyclonec/
 ├── src/
-│   ├── main.rs             collect files, resolve --out, write or check
-│   ├── cli.rs               seven flags
-│   ├── model.rs              Model / Field - the shape all three scanners produce
+│   ├── bin/
+│   │   ├── cyclonec.rs         generate / compat / ci
+│   │   └── cyclone_inspect.rs
+│   ├── cli.rs                  three commands, parsed by hand
+│   ├── config.rs               cyclone.toml
+│   ├── gomod.rs                 just enough of go.mod to compute an import path
 │   ├── parser/
-│   │   ├── mod.rs            picks a scanner by extension
-│   │   ├── rust.rs           lexer + scanner for #[network] / #[codec(...)]
-│   │   ├── csharp.rs         lexer + scanner for [Network] / [Codec(...)]
-│   │   └── go.rs             lexer + scanner for //cyclone:model + struct tags
-│   └── generator/
-│       ├── mod.rs
-│       ├── rust.rs           Model → Rust source
-│       ├── rust_runtime.rs   the RFC-0002 block, as one Rust constant
-│       ├── csharp.rs         Model → C# source
-│       ├── csharp_runtime.rs the RFC-0002 block, as one C# constant
-│       ├── go.rs             Model → Go source
-│       └── go_runtime.rs     the RFC-0002 block, as one Go constant
+│   │   ├── rust.rs             lexer + scanner for #[network] / #[codec(...)]
+│   │   ├── go.rs               lexer + scanner for //cyclone:model + struct tags
+│   │   ├── csharp.rs           lexer + scanner for [Network] / [Codec(...)]
+│   │   ├── gdscript.rs         scanner for # cyclone:model / # cyclone:TYPE comments
+│   │   ├── cpp.rs              lexer + scanner for CYCLONE_MODEL / CYCLONE_CODEC(...) / CYCLONE_FIELD(...)
+│   │   └── c.rs                the same, minus namespace/class/access-specifier handling
+│   ├── model.rs                what the scanner collected
+│   ├── ir.rs                   the Cyclone IR - the source of truth
+│   ├── fingerprint.rs          the canonical form, and SHA-256 over it
+│   ├── schema.rs               .cyclone/schema.json
+│   ├── compat.rs               CURRENT / COMPATIBLE / BREAKING
+│   ├── buildgraph.rs           .cyclone/build-graph.json
+│   ├── generate.rs             discover → parse → IR → render → compare → write
+│   ├── generator/
+│   │   ├── rust.rs             one message → one file
+│   │   ├── rust_runtime.rs     the RFC-0002 block, as one constant
+│   │   ├── handshake.rs        the fingerprint constants, Rust
+│   │   ├── go.rs               one message → one file, Go
+│   │   ├── go_runtime.rs       the RFC-0002 block, as one constant, Go
+│   │   ├── go_handshake.rs     the fingerprint constants, Go
+│   │   ├── csharp.rs           one message → one file, C#
+│   │   ├── csharp_runtime.rs   the RFC-0002 block, as one constant, C#
+│   │   ├── csharp_handshake.rs the fingerprint constants, C#
+│   │   ├── gdscript.rs         one message → one file, GDScript
+│   │   ├── gdscript_runtime.rs the RFC-0002 block, as one constant, GDScript
+│   │   ├── gdscript_handshake.rs the fingerprint constants, GDScript
+│   │   ├── cpp.rs              one message → one header, C++
+│   │   ├── cpp_runtime.rs      the RFC-0002 block, as one constant, C++
+│   │   ├── cpp_handshake.rs    the fingerprint constants, C++
+│   │   ├── c.rs                one message → one header (free functions), C
+│   │   ├── c_runtime.rs        the RFC-0002 block, as one constant, C
+│   │   └── c_handshake.rs      the fingerprint constants, C
+│   ├── inspect.rs              cyclone-inspect
+│   ├── json.rs                 written by hand: key order is authored
+│   ├── sha256.rs               written by hand: a hash must not have a version
+│   └── timestamp.rs
 ├── tests/
-│   ├── cli.rs                drives the real binary, all three languages
-│   ├── generated.rs          compiles + runs the committed Rust output
-│   ├── fixtures/             the schema, once per language, plus a go.mod
-│   └── csharp/               a dotnet project: compiles + runs the C# output
-└── README.md
+│   ├── cli.rs                  the real binaries, over real files
+│   ├── generated.rs            the committed Rust generated tree, compiled and run
+│   ├── vectors.rs              the cross-SDK vectors, checked
+│   ├── fixtures/               a small Rust project, laid out like a real one:
+│   │                           src/models/*.rs annotated in place, and the
+│   │                           src/generated/ tree written from them
+│   ├── fixtures-go/            the same, in Go - go.mod, src/models/*.go,
+│   │                           src/generated/*.go; built and `go vet`ted in CI
+│   │                           (.github/workflows/ci.yml), since cargo test has
+│   │                           no Go toolchain to compile it with
+│   ├── fixtures-cs/            the same, in C# - a .csproj, src/models/*.cs,
+│   │                           src/generated/*.cs; built in CI
+│   │                           (.github/workflows/ci.yml), since cargo test has
+│   │                           no .NET SDK to compile it with
+│   ├── fixtures-gd/            the same, in GDScript - src/models/*.gd (one
+│   │                           model per file), src/generated/*.gd; only
+│   │                           `generate --check`ed in CI, never built - see
+│   │                           the GDScript section above
+│   ├── fixtures-cpp/           the same, in C++ - include/cyclone.h,
+│   │                           src/models/player.hpp, src/generated/*.hpp;
+│   │                           built with g++ and its smoke test actually run
+│   │                           in CI (.github/workflows/ci.yml), since cargo
+│   │                           test has no C++ toolchain to compile it with
+│   ├── fixtures-c/             the same, in C - include/cyclone.h (shared
+│   │                           with the C++ fixture), src/models/player.h,
+│   │                           src/generated/*.h; built with gcc and its
+│   │                           smoke test actually run in CI, for the same
+│   │                           reason as the C++ fixture
+│   └── vectors/cyclone-vectors.json
+├── SPEC-FINGERPRINT.md         normative: the canonical form
+└── MIGRATION.md                what changed from cyclonec_old, and why
 ```
 
-A fourth language is the same shape again: a `parser/<lang>.rs` reading that
-language's own way of spelling the four markers into the same `Model` /
-`Field`, and a `generator/<lang>.rs` + `generator/<lang>_runtime.rs` pair
-writing it back out. None of the three existing backends imports another, and
-none would need to change.
+A seventh target language is a `parser/<lang>.rs` and a `generator/<lang>.rs` +
+`generator/<lang>_runtime.rs` pair - see [`parser/go.rs`](src/parser/go.rs) and
+[`generator/go.rs`](src/generator/go.rs) (or their C#, GDScript, C++ and C
+counterparts) for what that looked like the last five times. Nothing above
+`ir.rs` moved: schema, fingerprints, compatibility and the build graph are
+language-independent by construction, exactly as designed.
+
+---
 
 ## Tests
 
-`tests/generated.rs` includes the committed `tests/fixtures/cyclone.codec.rs`
-into a real crate and runs it, so everything it asserts is code `rustc`
-accepted. Because the file carries its own runtime, there is no stub and no
-import: the assertions are **real wire bytes**, compared against RFC-0002 -
-including the endianness vector, `-0.0` keeping its sign, a `string` length
-counted in bytes, and the decoder rejecting an invalid `bool`, a truncated
-read, bad UTF-8, and a length past its `Limits`.
-
-`tests/csharp/` is the same proof for the C# backend, as a real `dotnet test`
-project. `tests/fixtures/` is the same proof again for Go, as a real `go test`
-package: `device_state.go` (the models), `cyclone.codec.go` (what `cyclonec`
-generated from them) and `cyclone_generated_test.go` (hand-written assertions)
-all live in one Go package, the way Go tests conventionally do, and every byte
-expectation is copied line for line from the Rust and C# versions of the same
-test. All three assert the **identical byte sequences** for the same schema -
-the cross-language requirement this project exists to hold, checked rather
-than assumed.
-
-`tests/cli.rs` drives the real binary over real files, for all three
-languages: the codecs a model declares, PascalCase names, each language's
-error(s), where `--out` writes for each extension, a directory holding all
-three languages at once, aggregation of several sources into one file per
-language, `--check`, `--stdout`, each lexer refusing to see models in comments
-and strings, the native-type independence case per language (checked against
-the generator's own output text rather than by compiling it), and - for
-Go specifically - the directive-must-precede-a-struct rule, the
-directive-word-boundary rule, and the `package` clause being carried into the
-generated file.
-
+```bash
+cargo test
 ```
-cargo test                            # the generator, all three frontends and backends
-cd tests/csharp && dotnet test        # the C# backend's output, compiled and run
-cd tests/fixtures && go test ./...    # the Go backend's output, compiled and run
-```
+
+- **`src/**`** - unit tests: the scanner, the IR and its checks, the canonical
+  fingerprint text and a pinned digest, every row of the compatibility table,
+  the JSON round trip, SHA-256 against its published vectors.
+- **`tests/generated.rs`** - the committed `tests/fixtures/src/generated/` tree
+  compiled into a real crate and run, against the **same annotated model files**
+  `cyclonec` scanned - not a second copy of them. Every byte expectation is read off
+  RFC-0002: endianness, `-0.0` keeping its sign, a `string` length counted in
+  bytes, a nested model inline, and §9.1 line by line - trailing bytes, an
+  absent field, a partial field, a truncated array. Plus the three handshake
+  outcomes.
+- **`tests/cli.rs`** - the real binaries over real files: what gets written and
+  where, `--check`, the compatibility warnings, `compat`'s exit codes, `ci`
+  against a real git repository with a `develop` branch, the inspector, that a
+  stale `schema.json` changes what is *reported* and never what is generated,
+  the Go backend - one file per codec in a shared package, `Array<Array<T>>`
+  refused, a mixed Rust/Go `--src` refused, `go.mod` required at the root -
+  the C# backend - one file per codec in a shared namespace, `--model-path`
+  overriding it, a mixed Rust/C# `--src` refused - the GDScript backend -
+  one file per codec, no qualification of any kind, `--model-path` proven to
+  have no effect, a mixed Rust/GDScript `--src` refused - the C++
+  backend - one file per codec in a shared namespace, the model header
+  `#include`d by its own source path, `--model-path` overriding the
+  namespace but never that `#include` path, a mixed Rust/C++ `--src`
+  refused - and the C backend - one file per codec plus one free-function
+  file per model, the model header `#include`d by its own source path,
+  `--model-path` proven to have no effect (there is no namespace to
+  override), a mixed Rust/C `--src` refused.
+- **`tests/vectors.rs`** - `tests/vectors/cyclone-vectors.json`, the artifact
+  another SDK checks itself against: fixed bytes and fixed digests, verified
+  through the real generated codecs.
+- **`tests/fixtures-go/` and `tests/fixtures-cs/`, in CI, not `cargo test`** -
+  `cargo test` has neither a Go toolchain nor a .NET SDK, so
+  `.github/workflows/ci.yml` builds (and, for Go, `go vet`s) each committed
+  fixture directly: real compilation, the same rigor `tests/generated.rs` gets
+  from `rustc` for the Rust one.
+- **`tests/fixtures-gd/`, in CI, `generate --check` only** - there is no
+  headless Godot toolchain in this project's CI at all, official or
+  otherwise, so unlike the Go and C# fixtures, this one is never actually
+  compiled by anything this repository runs; only that the committed tree is
+  what `cyclonec` writes today is verified automatically.
+- **`tests/fixtures-cpp/`, in CI, built *and* run** - `cargo test` has no C++
+  toolchain either, but g++ ships on CI's own runner image, so
+  `.github/workflows/ci.yml` goes one step further here than it does for Go
+  or C#: it compiles every generated header under `-Wall -Wextra -Wpedantic
+  -Werror`, then actually executes `smoke_test.cpp` - a hand-written program,
+  not part of the generated tree - which encodes, decodes, and checks RFC-0002
+  §9.1's version-skew and truncation cases and the three handshake outcomes
+  against real compiled output.
+- **`tests/fixtures-c/`, in CI, built *and* run** - the same treatment as the
+  C++ fixture, with gcc in place of g++ and `-std=c99` in place of
+  `-std=c++17`: `smoke_test.c` round-trips a `Team` with a nested model, a
+  `string`/`bytes` field and three kinds of `Array<T>`, exercises §9.1's
+  version-skew and truncation cases, calls the generated `_free` functions,
+  and checks the three handshake outcomes, all against real compiled output.
+
+---
 
 ## References
 
 - RFC-0001 - What Cyclone is
-- RFC-0002 - Binary Reader / Writer API, which names every method generated here
+- RFC-0002 - Wire format, which names every method the runtime carries
 - RFC-0003 - Conformance
+- [SPEC-FINGERPRINT.md](SPEC-FINGERPRINT.md) - the fingerprint canonical form
+- [MIGRATION.md](MIGRATION.md) - from `cyclonec_old`
 
 ## License
 

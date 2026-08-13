@@ -1,30 +1,35 @@
-//! Source → [`Model`]s, one scanner per source language.
+//! Source → [`Model`]s.
 //!
-//! **Neither scanner is a parser for its language.** Neither knows types,
-//! traits, generics, namespaces, or any other semantic of Rust or C# - the host
-//! compiler already does, and running a second copy of it to find four markers
-//! would be the slowest possible way to answer the smallest possible question.
-//!
-//! Both look for exactly this much, in their own syntax:
+//! **This is not a parser for Rust.** It knows no types, traits, generics or
+//! modules - `rustc` already does, and running a second copy of it to find four
+//! markers would be the slowest possible way to answer the smallest possible
+//! question. It looks for exactly this much:
 //!
 //! ```text
-//!                              Rust                    C#
-//! this is a model              #[network]               [Network]
-//! generate these codecs        #[codec(a, b)]            [Codec("a", "b")]
-//! this field's wire type       #[network(TYPE)]          [Network("TYPE")]
-//! this field's codecs          #[codec(a, b)]             [Codec("a", "b")]
+//! this is a model            #[network]
+//! generate these codecs      #[codec(a, b)]
+//! this field's wire type     #[network(TYPE)]
+//! this field's codecs        #[codec(a, b)]
 //! ```
 //!
 //! Everything else in a file is tokens to step over. A field's host-language
 //! type is skipped without being read, because the annotation already said what
-//! goes on the wire - see [`crate::model`] for why that is not a detail, but the
-//! whole point.
+//! goes on the wire.
 //!
-//! The one thing each scanner must get right is *where a token is*: a `#[` or
-//! `[` inside a string, or `struct` inside a comment, must not be mistaken for
-//! source. That is what each module's lexer is for, and it is the only reason
-//! this is a scanner and not a substring search.
+//! The one thing the scanner must get right is *where a token is*: a `#[` inside
+//! a string, or `struct` inside a comment, must not be mistaken for source. That
+//! is what [`rust`]'s lexer is for, and it is the only reason this is a scanner
+//! and not a substring search.
+//!
+//! Rust, Go, C#, GDScript, C++ and C are read today, by six independent
+//! scanners ([`rust`], [`go`], [`csharp`], [`gdscript`], [`cpp`], [`c`]) into
+//! the identical [`Model`] shape - and nothing downstream of [`crate::ir`]
+//! cares which one produced it, because the IR is where a schema stops being
+//! source and starts being a schema. A seventh language is a seventh module
+//! here, dispatched on its extension in [`parse`] below.
 
+pub mod c;
+pub mod cpp;
 pub mod csharp;
 pub mod gdscript;
 pub mod go;
@@ -51,13 +56,17 @@ impl std::fmt::Display for Error {
     }
 }
 
-/// Extracts every network model from `text`, choosing a scanner by `path`'s
-/// extension: `.cs` reads C#, `.go` reads Go, `.gd` reads GDScript, anything
-/// else reads Rust.
+/// Extracts every network model from `text`.
 ///
-/// `path` is carried for error messages only; nothing reads it to decide
-/// content - the extension check is the one exception, and it exists only to
-/// pick which of the three scanners below runs.
+/// `path` picks the scanner - `.go` reads Go, `.cs` reads C#, `.gd` reads
+/// GDScript, `.hpp`/`.cpp`/`.cc`/`.cxx` reads C++, `.c`/`.h` reads C,
+/// everything else reads Rust - and is carried into the models (for
+/// `schema.json` and the build graph) and into error messages; nothing else
+/// about it decides content.
+///
+/// `.h` reads as C, not C++: the two share no other extension, and a C
+/// project's models live in headers as often as not, so a C++ project's
+/// headers are expected to use `.hpp` instead.
 ///
 /// # Errors
 ///
@@ -66,9 +75,11 @@ impl std::fmt::Display for Error {
 /// compiler's to report, and passes through here without comment.
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("cs") => csharp::parse(path, text),
         Some("go") => go::parse(path, text),
+        Some("cs") => csharp::parse(path, text),
         Some("gd") => gdscript::parse(path, text),
+        Some("hpp") | Some("cpp") | Some("cc") | Some("cxx") => cpp::parse(path, text),
+        Some("c") | Some("h") => c::parse(path, text),
         _ => rust::parse(path, text),
     }
 }

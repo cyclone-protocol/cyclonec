@@ -2,24 +2,31 @@
 //!
 //! Reads `#[network]` / `#[network(TYPE)]` / `#[codec(...)]`. See
 //! [`crate::parser`] for what this scanner is and is not.
+//!
+//! Ported from `cyclonec_old` with its behaviour intact - the same tokens, the
+//! same struct walk, the same one error. What is new is only that each model
+//! and each field now carries the file and line it was read from, which the IR
+//! needs for `schema.json`, the build graph, and diagnostics that point at
+//! source rather than at a schema.
 
 use std::path::Path;
 
-use crate::model::{Field, Language, Model};
+use crate::model::{Field, Model};
 use crate::parser::Error;
 
 /// Extracts every `#[network]` model from `text`.
 ///
-/// `path` is carried for error messages only; nothing reads it.
-///
 /// # Errors
 ///
-/// Only what stops generation: an annotation the generator needs and cannot
-/// read. Source that does not compile for any other reason is `rustc`'s to
-/// report, and passes through here without comment.
+/// Only what stops generation: a `#[network]` field with no network type.
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     let tokens = lex(text);
-    Scanner { path, tokens: &tokens, at: 0 }.file()
+    Scanner {
+        path,
+        tokens: &tokens,
+        at: 0,
+    }
+    .file()
 }
 
 // ============================================================== the scanner
@@ -92,10 +99,16 @@ impl<'a> Scanner<'a> {
 
         // `#!` is an inner attribute and never one of ours; `#` before anything
         // but `[` is not an attribute at all.
-        if self.peek().is_some_and(|token| token.kind == Kind::Punct('!')) {
+        if self
+            .peek()
+            .is_some_and(|token| token.kind == Kind::Punct('!'))
+        {
             self.bump();
         }
-        if !self.peek().is_some_and(|token| token.kind == Kind::Punct('[')) {
+        if !self
+            .peek()
+            .is_some_and(|token| token.kind == Kind::Punct('['))
+        {
             return Ok(());
         }
 
@@ -143,16 +156,19 @@ impl<'a> Scanner<'a> {
 
     /// Reads a struct declaration, returning it if it is a model.
     fn strukt(&mut self, pending: &mut Pending) -> Result<Option<Model>, Error> {
-        let line = self.peek().map_or(pending.line, |token| token.line);
         let Some(name) = self.peek().and_then(Token::ident) else {
             return Ok(None);
+        };
+        let line = if pending.line == 0 {
+            self.peek().map_or(1, |token| token.line)
+        } else {
+            pending.line
         };
         self.bump();
 
         // A struct nothing marks is somebody else's type. It must not become an
         // error just because it shares a file with a model.
         let is_model = pending.network.is_some();
-        let _ = line;
 
         // Generics, a where-clause, a tuple body: stepped over without being
         // read. A `;` before any `{` means the struct has no named fields.
@@ -169,8 +185,9 @@ impl<'a> Scanner<'a> {
         }
 
         let model = Model {
-            language: Language::Rust,
             name: name.to_owned(),
+            source: self.path.to_path_buf(),
+            line,
             codecs: dedupe(std::mem::take(&mut pending.codecs)),
             fields: match body {
                 Some(open) => self.fields(open)?,
@@ -200,13 +217,18 @@ impl<'a> Scanner<'a> {
             }
 
             // A field is `name : type`, after any modifiers. Anything else in a
-            // struct body is skipped to the next comma.
-            // A field is `name :`, and `name ::` is a path in somebody's default
-            // expression.
+            // struct body is skipped to the next comma. `name ::` is a path in
+            // somebody's default expression, not a field.
             let name = token.ident();
             let is_field = name.is_some()
-                && self.tokens.get(self.at + 1).is_some_and(|next| next.kind == Kind::Punct(':'))
-                && !self.tokens.get(self.at + 2).is_some_and(|after| after.kind == Kind::Punct(':'));
+                && self
+                    .tokens
+                    .get(self.at + 1)
+                    .is_some_and(|next| next.kind == Kind::Punct(':'))
+                && !self
+                    .tokens
+                    .get(self.at + 2)
+                    .is_some_and(|after| after.kind == Kind::Punct(':'));
 
             if !is_field {
                 self.bump();
@@ -217,15 +239,15 @@ impl<'a> Scanner<'a> {
             }
 
             let name = name.expect("checked above");
-            // The attribute's line, not the field's: an error about `#[network]`
-            // should point at the `#[network]` the user wrote.
+            // The attribute's line, not the field's: an error about
+            // `#[network]` should point at the `#[network]` the user wrote.
             let line = pending.line;
             self.at += 2;
             self.skip_field_type(close);
 
             match pending.network.take() {
-                // §18 - the one syntax error worth reporting: the generator was
-                // told this field is on the wire but not what to write for it.
+                // The one syntax error worth reporting: the generator was told
+                // this field is on the wire, but not what to write for it.
                 Some(None) => {
                     return Err(self.error(line, "#[network] field requires a network type"));
                 }
@@ -233,6 +255,7 @@ impl<'a> Scanner<'a> {
                     name: name.to_owned(),
                     network_type,
                     codecs: dedupe(std::mem::take(&mut pending.codecs)),
+                    line,
                 }),
                 // No `#[network(...)]`: not a network field, and not an error.
                 None => {}
@@ -256,7 +279,11 @@ impl<'a> Scanner<'a> {
     }
 
     fn error(&self, line: usize, message: &str) -> Error {
-        Error { path: self.path.to_path_buf(), line, message: message.to_owned() }
+        Error {
+            path: self.path.to_path_buf(),
+            line,
+            message: message.to_owned(),
+        }
     }
 
     /// Steps over a struct's generics and where-clause.
@@ -337,8 +364,8 @@ impl<'a> Scanner<'a> {
 
 /// Joins an attribute's argument tokens back into the text the user wrote.
 ///
-/// `Array < u32 >` becomes `Array<u32>`. The result is handed to the generator
-/// as a name, not as something to analyse.
+/// `Array < u32 >` becomes `Array<u32>`. The result is handed to the IR as a
+/// name to resolve, not as something this module analyses.
 fn render(tokens: &[Token<'_>]) -> String {
     let mut out = String::new();
     for token in tokens {
@@ -473,7 +500,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
         if let Some(next) = raw_string(bytes, at) {
             line += count_newlines(&bytes[at..next]);
             at = next;
-            tokens.push(Token { kind: Kind::Other, line });
+            tokens.push(Token {
+                kind: Kind::Other,
+                line,
+            });
             continue;
         }
 
@@ -487,18 +517,27 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             }
             at = (at + 1).min(bytes.len());
             line += count_newlines(&bytes[start..at]);
-            tokens.push(Token { kind: Kind::Other, line });
+            tokens.push(Token {
+                kind: Kind::Other,
+                line,
+            });
             continue;
         }
 
-        // `'c'` is a literal; `'a` is a lifetime, and its `'` is just punctuation.
+        // `'c'` is a literal; `'a` is a lifetime, and its `'` is punctuation.
         if byte == b'\'' {
             if let Some(next) = char_literal(bytes, at) {
                 at = next;
-                tokens.push(Token { kind: Kind::Other, line });
+                tokens.push(Token {
+                    kind: Kind::Other,
+                    line,
+                });
                 continue;
             }
-            tokens.push(Token { kind: Kind::Punct('\''), line });
+            tokens.push(Token {
+                kind: Kind::Punct('\''),
+                line,
+            });
             at += 1;
             continue;
         }
@@ -511,7 +550,10 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             // `r#type` is an identifier whose `r#` is not part of the name.
             let name = &text[start..at];
             let name = name.strip_prefix("r#").unwrap_or(name);
-            tokens.push(Token { kind: Kind::Ident(name), line });
+            tokens.push(Token {
+                kind: Kind::Ident(name),
+                line,
+            });
             continue;
         }
 
@@ -519,11 +561,17 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             while at < bytes.len() && (is_ident_continue(bytes[at]) || bytes[at] == b'.') {
                 at += 1;
             }
-            tokens.push(Token { kind: Kind::Other, line });
+            tokens.push(Token {
+                kind: Kind::Other,
+                line,
+            });
             continue;
         }
 
-        tokens.push(Token { kind: Kind::Punct(byte as char), line });
+        tokens.push(Token {
+            kind: Kind::Punct(byte as char),
+            line,
+        });
         at += 1;
     }
 
@@ -579,7 +627,8 @@ fn char_literal(bytes: &[u8], at: usize) -> Option<usize> {
         None => return None,
     };
 
-    // A lifetime looks the same up to here; only the closing quote separates them.
+    // A lifetime looks the same up to here; only the closing quote separates
+    // them.
     (bytes.get(after_escape) == Some(&b'\'')).then_some(after_escape + 1)
 }
 
@@ -593,4 +642,90 @@ fn is_ident_start(byte: u8) -> bool {
 
 fn is_ident_continue(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80 || byte == b'#'
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::parse;
+
+    fn models(source: &str) -> Vec<crate::model::Model> {
+        parse(Path::new("test.rs"), source).expect("parse")
+    }
+
+    #[test]
+    fn reads_a_model_its_codecs_and_its_fields() {
+        let models = models(
+            r#"
+            #[network]
+            #[codec(edge, unity)]
+            pub struct Player {
+                #[network(u32)]
+                #[codec(edge, unity)]
+                pub id: u32,
+
+                #[network(f32)]
+                #[codec(edge)]
+                pub x: f32,
+
+                /// Not on the wire at all.
+                pub cache: String,
+            }
+            "#,
+        );
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "Player");
+        assert_eq!(models[0].codecs, ["edge", "unity"]);
+        assert_eq!(models[0].fields.len(), 2);
+        assert_eq!(models[0].fields[1].network_type, "f32");
+        assert_eq!(models[0].fields[1].codecs, ["edge"]);
+    }
+
+    #[test]
+    fn an_unmarked_struct_is_not_a_model() {
+        assert!(models("pub struct Plain { pub id: u32 }").is_empty());
+    }
+
+    #[test]
+    fn a_network_field_without_a_type_is_an_error() {
+        let error = parse(
+            Path::new("test.rs"),
+            "#[network]\n#[codec(edge)]\nstruct S {\n    #[network]\n    id: u32,\n}",
+        )
+        .expect_err("no network type");
+
+        assert_eq!(error.line, 4);
+        assert!(error.message.contains("requires a network type"));
+    }
+
+    #[test]
+    fn a_model_in_a_comment_or_a_string_is_not_a_model() {
+        assert!(models("// #[network] struct Ghost { }").is_empty());
+        assert!(models("/* #[network]\nstruct Ghost { } */").is_empty());
+        assert!(models(r##"const S: &str = "#[network] struct Ghost { }";"##).is_empty());
+    }
+
+    #[test]
+    fn a_composite_network_type_keeps_its_spelling() {
+        let models = models(
+            "#[network]\n#[codec(edge)]\nstruct S {\n    #[network(Array<u32>)]\n    #[codec(edge)]\n    xs: Vec<u32>,\n}",
+        );
+        assert_eq!(models[0].fields[0].network_type, "Array<u32>");
+    }
+
+    #[test]
+    fn attributes_do_not_leak_past_another_item() {
+        let models =
+            models("#[network]\n#[codec(edge)]\nenum Kind { A }\nstruct After { id: u32 }");
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn a_model_carries_its_source_and_line() {
+        let models = models("\n\n#[network]\n#[codec(edge)]\nstruct Player {}");
+        assert_eq!(models[0].source, Path::new("test.rs"));
+        assert_eq!(models[0].line, 3);
+    }
 }

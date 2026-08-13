@@ -1,0 +1,2 @@
+src = "src"
+out = "src/generated"

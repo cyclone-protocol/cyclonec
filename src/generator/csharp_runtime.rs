@@ -1,27 +1,40 @@
-//! The Cyclone runtime, carried verbatim into every generated C# file.
+//! The Cyclone runtime, carried verbatim into `Runtime.cs`.
 //!
-//! The C# counterpart of [`super::rust_runtime`] - same reasoning, same
-//! guarantee: the block below is fixed, written once against RFC-0002, and
-//! copied out unchanged. Nothing about byte layout is computed per model, per
-//! field, or per run.
+//! The C# counterpart of [`super::rust_runtime`] and [`super::go_runtime`] -
+//! same reasoning, same guarantee: the block below is fixed, written once
+//! against RFC-0002, and copied out unchanged. Nothing about byte layout is
+//! computed per model, per field, or per run.
 //!
-//! It also carries the same behaviour as the Rust runtime, method for method:
-//! same Little Endian rule, same `bool` validation, same UTF-8 rejection, same
-//! `Limits` guard against an unbounded allocation from an untrusted length.
-//! `cyclonec`'s two backends read one `Model` and must produce one Cyclone
-//! Specification's worth of bytes - this is what keeps that true on the C# side
-//! without a shared assembly, since none is linked in (h.md §16).
+//! C# has exceptions, so where Rust returns `Result` and Go returns `(T,
+//! error)`, `Reader`'s methods either return a value or throw
+//! [`DecodeException`] - the idiom every generated `Decode` is written
+//! against: a read either produces the field's value or the method does not
+//! return at all.
 //!
-//! No namespace wrapper: the classes are usable the moment the file is in the
-//! project, the way the Rust block is usable the moment it is `include!`d.
+//! Method names are spelled the way [`super::go_runtime`] spells them
+//! (`WriteI8`, `ReadU32`, ...) rather than the longer names
+//! `cyclonec_old`'s C# backend used (`WriteInt8`, `ReadUInt32`, ...), so that
+//! the same RFC-0002 method has the same name on every backend this project
+//! generates for.
+//!
+//! # What changed from `cyclonec_old`
+//!
+//! One method: [`Reader.FieldAbsent`]. The old runtime gave a generated
+//! decoder no way to tell *this field never arrived* from *this field
+//! arrived truncated* - every read simply threw `DecodeException`, so the
+//! decoder could not implement RFC-0002 §9.1 at all. See `generator::csharp`
+//! for what the generated decoder does with it; the fix is identical in
+//! spirit to [`super::rust_runtime`]'s and [`super::go_runtime`]'s.
 
-/// The runtime block, emitted once at the top of every generated C# file.
+/// The runtime block, emitted once, into its own file, right after the
+/// namespace clause is opened.
 pub const RUNTIME: &str = r####"
 // ==========================================================================
 // Cyclone runtime - RFC-0002, carried verbatim.
 //
-// Not generated from your models: this block is identical in every file
-// cyclonec writes. It is here so the file is self-contained.
+// Not generated from your models: this block is identical in every project
+// cyclonec generates for. It is here so the generated namespace is
+// self-contained - nothing to add to your .csproj, nothing to import.
 // ==========================================================================
 
 /// A byte stream that does not satisfy the Cyclone Specification.
@@ -29,12 +42,17 @@ public sealed class DecodeException : System.Exception
 {
     private DecodeException(string message) : base(message) { }
 
-    /// Fewer bytes remain than the value being read requires.
+    /// Fewer bytes remain than the value being read requires, **after the
+    /// read had already begun**.
+    ///
+    /// Bytes running out exactly on a field boundary is not this error - it
+    /// is version skew (RFC-0002 §9.1), and the generated decoder handles it
+    /// without asking the runtime.
     public static DecodeException UnexpectedEof(long needed, long remaining) =>
         new DecodeException(
             $"unexpected eof: needed {needed} bytes, {remaining} remaining");
 
-    /// A `bool` byte that is neither `0x00` nor `0x01` (RFC-0002 §3).
+    /// A `bool` byte that is neither `0x00` nor `0x01` (RFC-0002 §2.4).
     public static DecodeException InvalidBool(byte value) =>
         new DecodeException($"invalid bool: 0x{value:X2} is neither 0x00 nor 0x01");
 
@@ -47,12 +65,12 @@ public sealed class DecodeException : System.Exception
         new DecodeException($"length overflow: length {length} exceeds limit {limit}");
 }
 
-/// Allocation guards applied while decoding (RFC-0002 §4).
+/// Allocation guards applied while decoding (RFC-0002 §12).
 ///
 /// A `u32` length can claim up to 4 GiB, so a decoder that allocates straight
-/// from an untrusted one is a denial-of-service target. These are **not part of
-/// the wire format**: two peers with different limits may disagree about a byte
-/// stream, and neither is wrong.
+/// from an untrusted one is a denial-of-service target. These are **not part
+/// of the wire format**: two peers with different limits may disagree about a
+/// byte stream, and neither is wrong.
 public struct Limits
 {
     /// Largest accepted UTF-8 byte length of a `string`.
@@ -95,38 +113,38 @@ public sealed class Writer
     public void WriteBool(bool value) => _buffer.Add(value ? (byte)0x01 : (byte)0x00);
 
     /// Writes an `i8` as 1 byte.
-    public void WriteInt8(sbyte value) => _buffer.Add(unchecked((byte)value));
+    public void WriteI8(sbyte value) => _buffer.Add(unchecked((byte)value));
 
     /// Writes a `u8` as 1 byte.
-    public void WriteUInt8(byte value) => _buffer.Add(value);
+    public void WriteU8(byte value) => _buffer.Add(value);
 
     /// Writes an `i16` as 2 bytes, Little Endian.
-    public void WriteInt16(short value) => WriteLittleEndian(unchecked((ushort)value), 2);
+    public void WriteI16(short value) => WriteLittleEndian(unchecked((ushort)value), 2);
 
     /// Writes a `u16` as 2 bytes, Little Endian.
-    public void WriteUInt16(ushort value) => WriteLittleEndian(value, 2);
+    public void WriteU16(ushort value) => WriteLittleEndian(value, 2);
 
     /// Writes an `i32` as 4 bytes, Little Endian.
-    public void WriteInt32(int value) => WriteLittleEndian(unchecked((uint)value), 4);
+    public void WriteI32(int value) => WriteLittleEndian(unchecked((uint)value), 4);
 
     /// Writes a `u32` as 4 bytes, Little Endian.
-    public void WriteUInt32(uint value) => WriteLittleEndian(value, 4);
+    public void WriteU32(uint value) => WriteLittleEndian(value, 4);
 
     /// Writes an `i64` as 8 bytes, Little Endian.
-    public void WriteInt64(long value) => WriteLittleEndian(unchecked((ulong)value), 8);
+    public void WriteI64(long value) => WriteLittleEndian(unchecked((ulong)value), 8);
 
     /// Writes a `u64` as 8 bytes, Little Endian.
-    public void WriteUInt64(ulong value) => WriteLittleEndian(value, 8);
+    public void WriteU64(ulong value) => WriteLittleEndian(value, 8);
 
     /// Writes an `f32` as its raw IEEE 754 bits, 4 bytes Little Endian.
     ///
-    /// The bit pattern is written unmodified: `NaN` payloads survive and `-0.0`
-    /// stays distinct from `0.0`.
-    public void WriteFloat32(float value) =>
+    /// The bit pattern is written unmodified: `NaN` payloads survive and
+    /// `-0.0` stays distinct from `0.0`.
+    public void WriteF32(float value) =>
         WriteLittleEndian(System.BitConverter.SingleToUInt32Bits(value), 4);
 
     /// Writes an `f64` as its raw IEEE 754 bits, 8 bytes Little Endian.
-    public void WriteFloat64(double value) =>
+    public void WriteF64(double value) =>
         WriteLittleEndian(System.BitConverter.DoubleToUInt64Bits(value), 8);
 
     /// Writes a `string` as a `u32` UTF-8 **byte** length, then those bytes.
@@ -135,20 +153,20 @@ public sealed class Writer
     public void WriteString(string value)
     {
         byte[] bytes = System.Text.Encoding.UTF8.GetBytes(value);
-        WriteUInt32((uint)bytes.Length);
+        WriteU32((uint)bytes.Length);
         _buffer.AddRange(bytes);
     }
 
     /// Writes a `bytes` blob as a `u32` length, then the raw bytes.
     public void WriteBytes(byte[] value)
     {
-        WriteUInt32((uint)value.Length);
+        WriteU32((uint)value.Length);
         _buffer.AddRange(value);
     }
 
     /// Writes an `Array<T>`'s element count (RFC-0002 §6) - the caller
     /// writes each element itself, in order, right after.
-    public void WriteArrayCount(int count) => WriteUInt32((uint)count);
+    public void WriteArrayCount(int count) => WriteU32((uint)count);
 
     private void WriteLittleEndian(ulong value, int byteCount)
     {
@@ -189,10 +207,36 @@ public ref struct Reader
     /// Whether the cursor has reached the end.
     public bool IsEmpty => Remaining == 0;
 
+    /// Whether the field about to be read is **absent** rather than
+    /// truncated.
+    ///
+    /// A generated decoder calls this at every field boundary, and it is the
+    /// whole of RFC-0002 §9.1's first rule:
+    ///
+    ///   Remaining == 0 at a field boundary
+    ///     -&gt; the writer's model stopped here; this field and every field
+    ///        after it are absent, and take their zero value. Not an error.
+    ///
+    ///   Remaining &gt; 0 but fewer bytes than the field needs
+    ///     -&gt; the field started and the stream ran out inside it. That is
+    ///        a truncated packet: <see cref="DecodeException"/>, never a
+    ///        zero.
+    ///
+    /// The distinction is the reason this method exists. Treating a partial
+    /// field as a zero would hide packet corruption behind a plausible
+    /// value.
+    public bool FieldAbsent() => Remaining == 0;
+
+    /// The limits this reader enforces.
+    public Limits GetLimits() => _limits;
+
     /// Reads a `bool` from 1 byte.
+    ///
+    /// Throws <see cref="DecodeException"/> for any byte but `0x00` and
+    /// `0x01` - "non-zero means true" is not permitted.
     public bool ReadBool()
     {
-        byte value = ReadUInt8();
+        byte value = ReadU8();
         if (value == 0x00) return false;
         if (value == 0x01) return true;
         _position -= 1;
@@ -200,41 +244,41 @@ public ref struct Reader
     }
 
     /// Reads an `i8` from 1 byte.
-    public sbyte ReadInt8() => unchecked((sbyte)Take(1)[0]);
+    public sbyte ReadI8() => unchecked((sbyte)Take(1)[0]);
 
     /// Reads a `u8` from 1 byte.
-    public byte ReadUInt8() => Take(1)[0];
+    public byte ReadU8() => Take(1)[0];
 
     /// Reads an `i16` from 2 bytes, Little Endian.
-    public short ReadInt16() => unchecked((short)ReadLittleEndian(2));
+    public short ReadI16() => unchecked((short)ReadLittleEndian(2));
 
     /// Reads a `u16` from 2 bytes, Little Endian.
-    public ushort ReadUInt16() => (ushort)ReadLittleEndian(2);
+    public ushort ReadU16() => (ushort)ReadLittleEndian(2);
 
     /// Reads an `i32` from 4 bytes, Little Endian.
-    public int ReadInt32() => unchecked((int)ReadLittleEndian(4));
+    public int ReadI32() => unchecked((int)ReadLittleEndian(4));
 
     /// Reads a `u32` from 4 bytes, Little Endian.
-    public uint ReadUInt32() => (uint)ReadLittleEndian(4);
+    public uint ReadU32() => (uint)ReadLittleEndian(4);
 
     /// Reads an `i64` from 8 bytes, Little Endian.
-    public long ReadInt64() => unchecked((long)ReadLittleEndian(8));
+    public long ReadI64() => unchecked((long)ReadLittleEndian(8));
 
     /// Reads a `u64` from 8 bytes, Little Endian.
-    public ulong ReadUInt64() => ReadLittleEndian(8);
+    public ulong ReadU64() => ReadLittleEndian(8);
 
     /// Reads an `f32` from its raw 4-byte IEEE 754 bits.
     ///
     /// The bits are reinterpreted, never normalized.
-    public float ReadFloat32() => System.BitConverter.UInt32BitsToSingle(ReadUInt32());
+    public float ReadF32() => System.BitConverter.UInt32BitsToSingle(ReadU32());
 
     /// Reads an `f64` from its raw 8-byte IEEE 754 bits.
-    public double ReadFloat64() => System.BitConverter.UInt64BitsToDouble(ReadUInt64());
+    public double ReadF64() => System.BitConverter.UInt64BitsToDouble(ReadU64());
 
     /// Reads a `string`: a `u32` UTF-8 byte length, then that many bytes.
     ///
-    /// The length is checked against the limit and against the bytes actually
-    /// remaining **before** anything is allocated.
+    /// The length is checked against the limit and against the bytes
+    /// actually remaining **before** anything is allocated.
     public string ReadString()
     {
         int start = _position;
@@ -269,7 +313,7 @@ public ref struct Reader
     private int ReadLength(long limit)
     {
         int start = _position;
-        uint len = ReadUInt32();
+        uint len = ReadU32();
         if (len > limit)
         {
             _position = start;
