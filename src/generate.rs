@@ -1720,7 +1720,12 @@ fn check_module_names(modules: &[String]) -> Result<(), String> {
 
 /// Every source file to read, as `(root, path)` - the root being the `--src`
 /// entry it was found under, which is what output paths are made relative to.
-fn discover(options: &Options) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+///
+/// `pub(crate)` rather than private: [`crate::watch`] calls this directly, on
+/// every poll, to build the same file list [`plan`] would read from -
+/// watching exactly what generation reads, with no second list to drift out
+/// of step with the first.
+pub(crate) fn discover(options: &Options) -> Result<Vec<(PathBuf, PathBuf)>, String> {
     let mut sources = Vec::new();
 
     for entry in &options.src {

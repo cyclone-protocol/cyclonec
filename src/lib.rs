@@ -75,3 +75,4 @@ pub mod parser;
 pub mod schema;
 pub mod sha256;
 pub mod timestamp;
+pub mod watch;

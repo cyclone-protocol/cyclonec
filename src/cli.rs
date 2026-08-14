@@ -25,7 +25,7 @@ codec file per model per codec, plus the schema, fingerprints and build graph
 that go with them.
 
 USAGE:
-    cyclonec generate [--src <PATH>]... [--out <PATH>] [--check] [-q]
+    cyclonec generate [--src <PATH>]... [--out <PATH>] [--check] [--watch] [-q]
     cyclonec compat --base <SCHEMA> [--head <SCHEMA>] [--src <PATH>]...
     cyclonec ci --base-ref <REF> [--src <PATH>]... [--out <PATH>]
 
@@ -80,7 +80,19 @@ OPTIONS:
                          of the default, which computes a relative `import`
                          straight from each model's own source path.
         --check          Write nothing; exit 1 if anything on disk is out of
-                         date. For CI, and for a pre-commit hook.
+                         date. For CI, and for a pre-commit hook. Not
+                         combined with --watch.
+        --watch          Generate once, then keep watching --src for changes
+                         and regenerate as they happen, until the process is
+                         terminated. A source file with an invalid model or
+                         annotation is reported and watched past, not a
+                         reason to stop:
+
+                             [cyclonec] error: failed to parse src/models/player.rs
+                             [cyclonec] watching for changes...
+
+                         Never watches --out, and never regenerates because
+                         of a file this generator wrote itself.
         --base <SCHEMA>  A schema.json to compare against. `compat` only.
         --head <SCHEMA>  A schema.json to compare, instead of reading source.
         --base-ref <REF> The target branch a pull request merges into, e.g.
@@ -94,6 +106,8 @@ OPTIONS:
 EXAMPLES:
     cyclonec generate --src src --out generated
     cyclonec generate --check
+    cyclonec --src src --out generated --watch
+    cyclonec --watch
     cyclonec compat --base .cyclone/schema.json
     cyclonec ci --base-ref origin/${GITHUB_BASE_REF}
 
@@ -228,6 +242,9 @@ pub struct GenerateArgs {
     pub paths: Paths,
     /// Report staleness instead of writing.
     pub check: bool,
+    /// Generate once, then keep regenerating on every source change until
+    /// terminated. Never both true alongside `check` - see [`parse`].
+    pub watch: bool,
     pub quiet: bool,
 }
 
@@ -279,6 +296,7 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Command, String
 
     let mut paths = Paths::default();
     let mut check = false;
+    let mut watch = false;
     let mut quiet = false;
     let mut base = None;
     let mut head = None;
@@ -296,6 +314,7 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Command, String
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
             "--check" => check = true,
+            "--watch" => watch = true,
             "-q" | "--quiet" => quiet = true,
             "--src" => paths.src.push(PathBuf::from(value()?)),
             "-o" | "--out" => paths.out = Some(PathBuf::from(value()?)),
@@ -308,11 +327,21 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Command, String
     }
 
     match command.as_str() {
-        "generate" => Ok(Command::Generate(GenerateArgs {
-            paths,
-            check,
-            quiet,
-        })),
+        "generate" => {
+            if check && watch {
+                return Err(
+                    "--check and --watch do not combine: --check only ever reports, --watch \
+                     always writes as source changes"
+                        .to_owned(),
+                );
+            }
+            Ok(Command::Generate(GenerateArgs {
+                paths,
+                check,
+                watch,
+                quiet,
+            }))
+        }
         "compat" => Ok(Command::Compat(CompatArgs {
             base: base.ok_or("compat needs --base <SCHEMA>: the schema to compare against")?,
             head,
@@ -370,6 +399,26 @@ mod tests {
             arguments.paths.src,
             [PathBuf::from("a"), PathBuf::from("b")]
         );
+    }
+
+    #[test]
+    fn watch_is_parsed_and_defaults_to_off() {
+        let Command::Generate(arguments) = command(&[]) else {
+            panic!("not generate");
+        };
+        assert!(!arguments.watch);
+
+        let Command::Generate(arguments) = command(&["--watch"]) else {
+            panic!("not generate");
+        };
+        assert!(arguments.watch);
+    }
+
+    #[test]
+    fn watch_and_check_do_not_combine() {
+        let error = parse(["--check", "--watch"].iter().map(OsString::from)).expect_err("conflict");
+        assert!(error.contains("--check"), "{error}");
+        assert!(error.contains("--watch"), "{error}");
     }
 
     #[test]
