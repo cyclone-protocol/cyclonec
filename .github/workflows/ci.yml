@@ -27,6 +27,10 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: cargo fmt
         run: cargo fmt --check
 
@@ -109,3 +113,30 @@ jobs:
             -I . -I include -I src \
             smoke_test.c -o /tmp/cyclone-c-smoke-test
           /tmp/cyclone-c-smoke-test
+
+      # Same shape as the Go and C# fixtures above: current, and actually
+      # buildable - `tsc` is installed from the fixture's own package.json,
+      # so the generated tree is real-world type-checked, not just
+      # freshness-checked the way GDScript's is.
+      - name: the committed TypeScript fixture is current
+        working-directory: tests/fixtures-ts
+        run: cargo run --quiet --bin cyclonec -- generate --check
+
+      - name: the committed TypeScript fixture builds and its smoke test round-trips
+        working-directory: tests/fixtures-ts
+        run: |
+          npm install
+          npx tsc -p tsconfig.json
+          node dist/smoke_test.js
+
+      # JavaScript needs no build step at all - the generated tree is run
+      # directly by Node's own ESM loader, which is also why every relative
+      # import the JavaScript backend writes carries an explicit `.js`
+      # extension (see generator::javascript's module docs).
+      - name: the committed JavaScript fixture is current
+        working-directory: tests/fixtures-js
+        run: cargo run --quiet --bin cyclonec -- generate --check
+
+      - name: the committed JavaScript fixture's smoke test round-trips
+        working-directory: tests/fixtures-js
+        run: node smoke_test.js

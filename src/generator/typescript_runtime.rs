@@ -1,0 +1,493 @@
+//! The Cyclone runtime, carried verbatim into `runtime.ts`.
+//!
+//! The TypeScript counterpart of [`super::rust_runtime`], [`super::go_runtime`]
+//! and [`super::csharp_runtime`] - same reasoning, same guarantee: the block
+//! below is fixed, written once against RFC-0002, and copied out unchanged.
+//! Nothing about byte layout, endianness or string encoding is computed per
+//! model, per field, or per run.
+//!
+//! # Why `DataView`, and why `bigint`
+//!
+//! `DataView` is the one built-in that reads and writes every RFC-0002
+//! primitive at an explicit byte offset with an explicit endianness
+//! (`littleEndian: true` on every call, never the platform default) and
+//! reinterprets `f32`/`f64` bits without normalizing them - exactly what
+//! `Writer.writeF32`/`Reader.readF32` need to keep `-0.0` and a `NaN`
+//! payload intact (RFC-0002 §2.3), the same property
+//! [`super::rust_runtime`]'s `to_bits`/`from_bits` round trip guarantees.
+//!
+//! A JavaScript `number` is an IEEE 754 double: exact for every integer up
+//! to 2^53, short of `u64`/`i64`'s full 64 bits. So, uniquely among this
+//! project's backends, `i64`/`u64` are `bigint` here, not `number` - and
+//! `DataView.getBigInt64`/`getBigUint64`/`setBigInt64`/`setBigUint64` (also
+//! always called with `littleEndian: true`) read and write them without ever
+//! routing a 64-bit value through a `number`.
+//!
+//! Like [`super::csharp_runtime`], TypeScript/JavaScript has exceptions, so
+//! `Reader`'s methods either return a value or throw [`DecodeError`] - never
+//! a `[value, error]` pair the way [`super::go_runtime`] returns one.
+//!
+//! `Writer` owns a `Uint8Array` that it grows by doubling, the same
+//! amortised-linear strategy `Vec<u8>`/`List<byte>` give the other backends
+//! for free; `Reader` never allocates while reading a fixed-width value,
+//! only where `Writer` did on the way in: a `string`'s or `bytes`'s payload.
+//!
+//! # `Reader.fieldAbsent`
+//!
+//! One method carries RFC-0002 §9.1's whole first rule, the same one
+//! [`super::rust_runtime::RUNTIME`]'s own doc comment explains: a decoder
+//! calls it at every field boundary, *before* reading, to tell "the writer's
+//! model stopped here" (not an error; the field and everything after it is
+//! zero) apart from "the field started and the stream ran out inside it" (a
+//! truncated packet: [`DecodeError`], never a zero). See `generator::typescript`
+//! for what the generated decoder does with it.
+
+/// The runtime block, emitted once, into its own file.
+pub const RUNTIME: &str = r####"
+// ==========================================================================
+// Cyclone runtime - RFC-0002, carried verbatim.
+//
+// Not generated from your models: this block is identical in every project
+// cyclonec generates for. It is here so the generated tree is self-contained -
+// nothing to add to package.json, nothing to import from elsewhere.
+// ==========================================================================
+
+const CYCLONE_TEXT_ENCODER = new TextEncoder();
+const CYCLONE_TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
+
+/** A byte stream that does not satisfy the Cyclone Specification. */
+export class DecodeError extends Error {
+    private constructor(message: string) {
+        super(message);
+        this.name = "DecodeError";
+    }
+
+    /**
+     * Fewer bytes remain than the value being read requires, **after the
+     * read had already begun**.
+     *
+     * Bytes running out exactly on a field boundary is not this error - it
+     * is version skew (RFC-0002 §9.1), and the generated decoder handles it
+     * without asking the runtime.
+     */
+    static unexpectedEof(needed: number, remaining: number): DecodeError {
+        return new DecodeError(`unexpected eof: needed ${needed} bytes, ${remaining} remaining`);
+    }
+
+    /** A `bool` byte that is neither `0x00` nor `0x01` (RFC-0002 §2.4). */
+    static invalidBool(value: number): DecodeError {
+        return new DecodeError(
+            `invalid bool: 0x${value.toString(16).padStart(2, "0")} is neither 0x00 nor 0x01`,
+        );
+    }
+
+    /** A `string` region that is not valid UTF-8. */
+    static invalidUtf8(): DecodeError {
+        return new DecodeError("invalid utf-8 in string");
+    }
+
+    /** A length field beyond the configured limit. */
+    static lengthOverflow(length: number, limit: number): DecodeError {
+        return new DecodeError(`length overflow: length ${length} exceeds limit ${limit}`);
+    }
+}
+
+/**
+ * Allocation guards applied while decoding (RFC-0002 §12).
+ *
+ * A `u32` length can claim up to 4 GiB, so a decoder that allocates straight
+ * from an untrusted one is a denial-of-service target. These are **not
+ * part of the wire format**: two peers with different limits may disagree
+ * about a byte stream, and neither is wrong.
+ */
+export class Limits {
+    constructor(
+        /** Largest accepted UTF-8 byte length of a `string`. */
+        public readonly maxStringLen: number,
+        /** Largest accepted byte length of a `bytes` blob. */
+        public readonly maxBytesLen: number,
+        /** Largest accepted element count of an `Array<T>` (RFC-0002 §6). */
+        public readonly maxArrayCount: number,
+    ) {}
+
+    /** The permissive default: `0xFFFFFFFF` for every field. */
+    static readonly UNLIMITED: Limits = new Limits(0xffffffff, 0xffffffff, 0xffffffff);
+}
+
+/**
+ * Appends Cyclone-encoded values to a growable buffer.
+ *
+ * Every multi-byte value is Little Endian, with no padding, no alignment and
+ * no metadata between values.
+ */
+export class Writer {
+    private bytes: Uint8Array;
+    private view: DataView;
+    private len: number;
+
+    constructor(capacity: number = 64) {
+        this.bytes = new Uint8Array(Math.max(capacity, 1));
+        this.view = new DataView(this.bytes.buffer);
+        this.len = 0;
+    }
+
+    /** The number of bytes written so far. */
+    get length(): number {
+        return this.len;
+    }
+
+    /** The bytes written so far, copied out. */
+    toUint8Array(): Uint8Array {
+        return this.bytes.slice(0, this.len);
+    }
+
+    private ensure(extra: number): void {
+        if (this.len + extra <= this.bytes.length) {
+            return;
+        }
+        let capacity = this.bytes.length * 2;
+        while (capacity < this.len + extra) {
+            capacity *= 2;
+        }
+        const grown = new Uint8Array(capacity);
+        grown.set(this.bytes.subarray(0, this.len));
+        this.bytes = grown;
+        this.view = new DataView(this.bytes.buffer);
+    }
+
+    /** Writes a `bool` as one byte: `0x00` or `0x01`, never anything else. */
+    writeBool(value: boolean): void {
+        this.ensure(1);
+        this.view.setUint8(this.len, value ? 1 : 0);
+        this.len += 1;
+    }
+
+    /** Writes an `i8` as 1 byte. */
+    writeI8(value: number): void {
+        this.ensure(1);
+        this.view.setInt8(this.len, value);
+        this.len += 1;
+    }
+
+    /** Writes a `u8` as 1 byte. */
+    writeU8(value: number): void {
+        this.ensure(1);
+        this.view.setUint8(this.len, value);
+        this.len += 1;
+    }
+
+    /** Writes an `i16` as 2 bytes, Little Endian. */
+    writeI16(value: number): void {
+        this.ensure(2);
+        this.view.setInt16(this.len, value, true);
+        this.len += 2;
+    }
+
+    /** Writes a `u16` as 2 bytes, Little Endian. */
+    writeU16(value: number): void {
+        this.ensure(2);
+        this.view.setUint16(this.len, value, true);
+        this.len += 2;
+    }
+
+    /** Writes an `i32` as 4 bytes, Little Endian. */
+    writeI32(value: number): void {
+        this.ensure(4);
+        this.view.setInt32(this.len, value, true);
+        this.len += 4;
+    }
+
+    /** Writes a `u32` as 4 bytes, Little Endian. */
+    writeU32(value: number): void {
+        this.ensure(4);
+        this.view.setUint32(this.len, value, true);
+        this.len += 4;
+    }
+
+    /** Writes an `i64` as 8 bytes, Little Endian, from a `bigint`. */
+    writeI64(value: bigint): void {
+        this.ensure(8);
+        this.view.setBigInt64(this.len, value, true);
+        this.len += 8;
+    }
+
+    /** Writes a `u64` as 8 bytes, Little Endian, from a `bigint`. */
+    writeU64(value: bigint): void {
+        this.ensure(8);
+        this.view.setBigUint64(this.len, value, true);
+        this.len += 8;
+    }
+
+    /**
+     * Writes an `f32` as its raw IEEE 754 bits, 4 bytes Little Endian.
+     *
+     * The bit pattern is written unmodified: `NaN` payloads survive and
+     * `-0.0` stays distinct from `0.0`.
+     */
+    writeF32(value: number): void {
+        this.ensure(4);
+        this.view.setFloat32(this.len, value, true);
+        this.len += 4;
+    }
+
+    /** Writes an `f64` as its raw IEEE 754 bits, 8 bytes Little Endian. */
+    writeF64(value: number): void {
+        this.ensure(8);
+        this.view.setFloat64(this.len, value, true);
+        this.len += 8;
+    }
+
+    /**
+     * Writes a `string` as a `u32` UTF-8 **byte** length, then those bytes.
+     *
+     * The length counts bytes, not characters.
+     */
+    writeString(value: string): void {
+        const encoded = CYCLONE_TEXT_ENCODER.encode(value);
+        this.writeLength(encoded.length);
+        this.ensure(encoded.length);
+        this.bytes.set(encoded, this.len);
+        this.len += encoded.length;
+    }
+
+    /** Writes a `bytes` blob as a `u32` length, then the raw bytes. */
+    writeBytes(value: Uint8Array): void {
+        this.writeLength(value.length);
+        this.ensure(value.length);
+        this.bytes.set(value, this.len);
+        this.len += value.length;
+    }
+
+    /**
+     * Writes an `Array<T>`'s element count (RFC-0002 §6) - the caller writes
+     * each element itself, in order, right after.
+     */
+    writeArrayCount(count: number): void {
+        this.writeLength(count);
+    }
+
+    private writeLength(len: number): void {
+        if (len > 0xffffffff) {
+            throw new RangeError(
+                "cyclone: length exceeds 0xFFFFFFFF and cannot be represented on the wire",
+            );
+        }
+        this.writeU32(len);
+    }
+}
+
+/**
+ * Reads Cyclone-encoded values from a borrowed buffer.
+ *
+ * Malformed input is always a {@link DecodeError}, never a silent wrong
+ * answer, and a failed read leaves the cursor where it was.
+ */
+export class Reader {
+    private readonly bytes: Uint8Array;
+    private readonly view: DataView;
+    private pos: number;
+    private readonly limits: Limits;
+
+    /** Creates a reader over `bytes` with {@link Limits.UNLIMITED}. */
+    constructor(bytes: Uint8Array, limits: Limits = Limits.UNLIMITED) {
+        this.bytes = bytes;
+        this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        this.pos = 0;
+        this.limits = limits;
+    }
+
+    /** The cursor position, in bytes from the start. */
+    get position(): number {
+        return this.pos;
+    }
+
+    /** The number of bytes left to read. */
+    get remaining(): number {
+        return this.bytes.length - this.pos;
+    }
+
+    /** Whether the cursor has reached the end. */
+    get isEmpty(): boolean {
+        return this.remaining === 0;
+    }
+
+    /**
+     * Whether the field about to be read is **absent** rather than
+     * truncated.
+     *
+     * A generated decoder calls this at every field boundary, and it is the
+     * whole of RFC-0002 §9.1's first rule:
+     *
+     * ```text
+     * remaining === 0 at a field boundary
+     *   -> the writer's model stopped here; this field and every field after
+     *      it are absent, and take their zero value. Not an error.
+     *
+     * remaining > 0 but fewer bytes than the field needs
+     *   -> the field started and the stream ran out inside it. That is a
+     *      truncated packet: DecodeError, never a zero.
+     * ```
+     *
+     * The distinction is the reason this method exists. Treating a partial
+     * field as a zero would hide packet corruption behind a plausible value.
+     */
+    fieldAbsent(): boolean {
+        return this.remaining === 0;
+    }
+
+    /** The limits this reader enforces. */
+    getLimits(): Limits {
+        return this.limits;
+    }
+
+    /**
+     * Reads a `bool` from 1 byte.
+     *
+     * Throws {@link DecodeError} for any byte but `0x00` and `0x01` -
+     * "non-zero means true" is not permitted.
+     */
+    readBool(): boolean {
+        const value = this.readU8();
+        if (value === 0x00) {
+            return false;
+        }
+        if (value === 0x01) {
+            return true;
+        }
+        this.pos -= 1;
+        throw DecodeError.invalidBool(value);
+    }
+
+    /** Reads an `i8` from 1 byte. */
+    readI8(): number {
+        return this.view.getInt8(this.take(1));
+    }
+
+    /** Reads a `u8` from 1 byte. */
+    readU8(): number {
+        return this.view.getUint8(this.take(1));
+    }
+
+    /** Reads an `i16` from 2 bytes, Little Endian. */
+    readI16(): number {
+        return this.view.getInt16(this.take(2), true);
+    }
+
+    /** Reads a `u16` from 2 bytes, Little Endian. */
+    readU16(): number {
+        return this.view.getUint16(this.take(2), true);
+    }
+
+    /** Reads an `i32` from 4 bytes, Little Endian. */
+    readI32(): number {
+        return this.view.getInt32(this.take(4), true);
+    }
+
+    /** Reads a `u32` from 4 bytes, Little Endian. */
+    readU32(): number {
+        return this.view.getUint32(this.take(4), true);
+    }
+
+    /** Reads an `i64` from 8 bytes, Little Endian, as a `bigint`. */
+    readI64(): bigint {
+        return this.view.getBigInt64(this.take(8), true);
+    }
+
+    /** Reads a `u64` from 8 bytes, Little Endian, as a `bigint`. */
+    readU64(): bigint {
+        return this.view.getBigUint64(this.take(8), true);
+    }
+
+    /**
+     * Reads an `f32` from its raw 4-byte IEEE 754 bits.
+     *
+     * The bits are reinterpreted, never normalized.
+     */
+    readF32(): number {
+        return this.view.getFloat32(this.take(4), true);
+    }
+
+    /** Reads an `f64` from its raw 8-byte IEEE 754 bits. */
+    readF64(): number {
+        return this.view.getFloat64(this.take(8), true);
+    }
+
+    /**
+     * Reads a `string`: a `u32` UTF-8 byte length, then that many bytes.
+     *
+     * The length is checked against the limit and against the bytes actually
+     * remaining **before** anything is decoded (RFC-0002 §10.1).
+     */
+    readString(): string {
+        const start = this.pos;
+        const len = this.readLength(this.limits.maxStringLen);
+
+        let offset: number;
+        try {
+            offset = this.take(len);
+        } catch (error) {
+            this.pos = start;
+            throw error;
+        }
+
+        try {
+            return CYCLONE_TEXT_DECODER.decode(this.bytes.subarray(offset, offset + len));
+        } catch {
+            this.pos = start;
+            throw DecodeError.invalidUtf8();
+        }
+    }
+
+    /** Reads a `bytes` blob: a `u32` length, then that many raw bytes. */
+    readBytes(): Uint8Array {
+        const start = this.pos;
+        const len = this.readLength(this.limits.maxBytesLen);
+
+        let offset: number;
+        try {
+            offset = this.take(len);
+        } catch (error) {
+            this.pos = start;
+            throw error;
+        }
+
+        return this.bytes.slice(offset, offset + len);
+    }
+
+    /**
+     * Reads an `Array<T>`'s element count (RFC-0002 §6), checked against
+     * {@link Limits.maxArrayCount} before the caller reads a single element.
+     */
+    readArrayCount(): number {
+        return this.readLength(this.limits.maxArrayCount);
+    }
+
+    private readLength(limit: number): number {
+        const start = this.pos;
+        const len = this.readU32();
+        if (len > limit) {
+            this.pos = start;
+            throw DecodeError.lengthOverflow(len, limit);
+        }
+        return len;
+    }
+
+    /**
+     * Borrows the next `len` bytes and advances the cursor, returning the
+     * offset they start at.
+     *
+     * The single place the remaining-bytes check lives, so no read path can
+     * read past the end - and the only one that ever moves `pos`, so a
+     * failed read always leaves it exactly where it was.
+     */
+    private take(len: number): number {
+        const remaining = this.remaining;
+        if (len > remaining) {
+            throw DecodeError.unexpectedEof(len, remaining);
+        }
+        const offset = this.pos;
+        this.pos += len;
+        return offset;
+    }
+}
+"####;

@@ -19,9 +19,10 @@ use std::path::PathBuf;
 pub const USAGE: &str = "\
 cyclonec - the official Cyclone source generator
 
-Reads Cyclone attributes from Rust, Go, C#, GDScript, C++ or C sources - never
-more than one language in one run - and writes one codec file per model per
-codec, plus the schema, fingerprints and build graph that go with them.
+Reads Cyclone attributes from Rust, Go, C#, GDScript, C++, C, TypeScript or
+JavaScript sources - never more than one language in one run - and writes one
+codec file per model per codec, plus the schema, fingerprints and build graph
+that go with them.
 
 USAGE:
     cyclonec generate [--src <PATH>]... [--out <PATH>] [--check] [-q]
@@ -41,10 +42,11 @@ OPTIONS:
         --src <PATH>     A directory to scan recursively, or a single file.
                          Repeatable. Default: cyclone.toml's `src`, else `src`.
                          Every file found must be one language - `.rs`, `.go`,
-                         `.cs`, `.gd`, `.hpp`/`.cpp`/`.cc`/`.cxx` (C++), or
-                         `.c`/`.h` (C) - never a mix; separate projects
-                         sharing one schema each get their own `--src`/`--out`
-                         (and usually their own cyclone.toml).
+                         `.cs`, `.gd`, `.hpp`/`.cpp`/`.cc`/`.cxx` (C++),
+                         `.c`/`.h` (C), or `.ts`/`.js` (TypeScript/
+                         JavaScript) - never a mix; separate projects sharing
+                         one schema each get their own `--src`/`--out` (and
+                         usually their own cyclone.toml).
     -o, --out <PATH>     Where generated source goes.
                          Default: cyclone.toml's `out`, else `generated`.
         --model-path <PATH>
@@ -72,6 +74,11 @@ OPTIONS:
                          has no namespace at all, only the same physical
                          `#include` path C++ has above (and, like C++'s,
                          never overridden by this option).
+                         TypeScript/JavaScript: an ES module specifier, e.g.
+                         `@/models` - every model is imported from that one
+                         module (a barrel re-exporting each of them) in place
+                         of the default, which computes a relative `import`
+                         straight from each model's own source path.
         --check          Write nothing; exit 1 if anything on disk is out of
                          date. For CI, and for a pre-commit hook.
         --base <SCHEMA>  A schema.json to compare against. `compat` only.
@@ -175,6 +182,29 @@ section of the README for why), and there is no `namespace` to open at all:
         CYCLONE_CODEC(\"edge\")             ->  in the edge codec only
         const char *Name;
     };
+
+TypeScript and JavaScript have neither attributes nor macros usable without a
+runtime dependency, so - like Go and GDScript - a comment directive says it,
+read the same way for both languages (`.ts` and `.js`) and requiring no
+decorator and no package to install:
+
+    // CYCLONE_MODEL
+    // CYCLONE_CODEC(\"edge\", \"unity\")      ->  PlayerEdgeCodec, PlayerUnityCodec
+    class Player {
+        // CYCLONE_FIELD(u32)
+        // CYCLONE_CODEC(\"edge\", \"unity\")  ->  in both
+        Id: number;
+
+        // CYCLONE_FIELD(f32)
+        // CYCLONE_CODEC(\"edge\")             ->  in the edge codec only
+        X: number;
+    }
+
+The TypeScript host type (`number`, above) is never consulted - `number`
+cannot say whether a field is `u32`, `i32`, `f32` or `f64` - only
+CYCLONE_FIELD's own argument is. A JavaScript model writes the identical
+directives with no type annotation at all (`Id;` in place of `Id: number;`)
+and means exactly the same thing.
 ";
 
 /// Where to read from and where to write to - shared by every command that

@@ -1,0 +1,8 @@
+# The fixture project, laid out the way a real TypeScript project is:
+# `src/` is the project root, one annotated model per file under
+# `src/models/`, and the generated tree beside them at `src/generated/`.
+src = "src"
+out = "src/generated"
+
+# No `model_path`: the default computes a relative `import` straight from
+# each model's own source path, exactly as it would in a real project.
