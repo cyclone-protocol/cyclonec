@@ -38,6 +38,8 @@ enum Language {
     GDScript,
     Cpp,
     C,
+    TypeScript,
+    JavaScript,
 }
 
 impl Language {
@@ -55,6 +57,8 @@ impl Language {
             // everything else.
             Some("c") | Some("h") => Language::C,
             Some("hpp") | Some("cpp") | Some("cc") | Some("cxx") => Language::Cpp,
+            Some("ts") => Language::TypeScript,
+            Some("js") => Language::JavaScript,
             _ => Language::Rust,
         }
     }
@@ -67,6 +71,8 @@ impl Language {
             Language::GDScript => "GDScript",
             Language::Cpp => "C++",
             Language::C => "C",
+            Language::TypeScript => "TypeScript",
+            Language::JavaScript => "JavaScript",
         }
     }
 }
@@ -203,6 +209,12 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
     // exactly what a generated C tree already needs (see `generator::c`), so
     // unlike `cpp_namespaces` there is nothing to collect here.
     let mut has_c = false;
+    // TypeScript and JavaScript need nothing collected here either: a
+    // generated codec reaches a model through an ES `import`, and where that
+    // points is computed from `model.source` alone once the schema exists -
+    // see `model_specifiers`.
+    let mut has_typescript = false;
+    let mut has_javascript = false;
     let mut failures = 0;
     for (root, path) in &sources {
         let text = match std::fs::read_to_string(path) {
@@ -237,6 +249,8 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
                                 .insert(display(path), crate::parser::cpp::namespace_name(&text));
                         }
                         Language::C => has_c = true,
+                        Language::TypeScript => has_typescript = true,
+                        Language::JavaScript => has_javascript = true,
                         Language::Rust => has_rust = true,
                     }
                     parsed.push((relative(root, path), models));
@@ -259,6 +273,8 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
         (has_gdscript, Language::GDScript),
         (has_cpp, Language::Cpp),
         (has_c, Language::C),
+        (has_typescript, Language::TypeScript),
+        (has_javascript, Language::JavaScript),
     ]
     .into_iter()
     .filter(|(present, _)| *present)
@@ -287,6 +303,10 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
         Language::Cpp
     } else if has_c {
         Language::C
+    } else if has_typescript {
+        Language::TypeScript
+    } else if has_javascript {
+        Language::JavaScript
     } else {
         Language::Rust
     };
@@ -304,6 +324,8 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
         Language::GDScript => plan_gdscript(options, &schema)?,
         Language::Cpp => plan_cpp(options, &schema, &cpp_namespaces)?,
         Language::C => plan_c(options, &schema)?,
+        Language::TypeScript => plan_typescript(options, &schema)?,
+        Language::JavaScript => plan_javascript(options, &schema)?,
     };
 
     files.push(PlannedFile {
@@ -1180,6 +1202,317 @@ fn c_runtime_file() -> String {
     out
 }
 
+// ============================================================= TypeScript plan
+
+/// The TypeScript half of [`plan`].
+///
+/// TypeScript needs no external project file, no package and no namespace -
+/// a model is reached from a generated codec file the way any two ES
+/// modules reach each other, through a relative `import` computed straight
+/// from `model.source` (see [`model_specifiers`]), the same "no project file
+/// needed" simplicity [`plan_gdscript`] has, but with the real per-file paths
+/// [`plan_cpp`]'s `#include`s have instead of a single global namespace.
+///
+/// # Errors
+///
+/// A model with `Array<Array<T>>` (a deliberate gap, see
+/// [`generator::typescript`]), or two codecs that would collide on one file
+/// name.
+fn plan_typescript(options: &Options, schema: &Schema) -> Result<BackendPlan, String> {
+    for model in &schema.models {
+        generator::typescript::check_no_nested_arrays(model)?;
+    }
+
+    let locations: std::collections::BTreeMap<String, generator::typescript::ModelLocation> =
+        model_specifiers(options, schema)
+            .into_iter()
+            .map(|(name, specifier)| (name, generator::typescript::ModelLocation { specifier }))
+            .collect();
+    let imports = generator::typescript::Imports {
+        locations: &locations,
+    };
+
+    let mut seen_files: BTreeSet<String> = BTreeSet::new();
+    for model in &schema.models {
+        for message in &model.messages {
+            let name = generator::typescript::file_name(&model.name, &message.codec);
+            if !seen_files.insert(name.clone()) {
+                return Err(format!(
+                    "two codecs would both be generated as `{name}` - rename one of the models \
+                     or codecs involved"
+                ));
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    let mut artifacts = Vec::new();
+
+    files.push(PlannedFile {
+        path: options.out.join("runtime.ts"),
+        contents: typescript_runtime_file(),
+        timestamped: true,
+    });
+
+    let handshake = generator::typescript_handshake::handshake_file(
+        schema,
+        options.validate_message_fingerprint,
+    )?;
+    files.push(PlannedFile {
+        path: options.out.join(generator::typescript_handshake::FILE_NAME),
+        contents: handshake,
+        timestamped: true,
+    });
+
+    for model in &schema.models {
+        for message in &model.messages {
+            let file = options.out.join(generator::typescript::file_name(
+                &model.name,
+                &message.codec,
+            ));
+            let contents = generator::typescript::codec_file(model, message, &imports);
+
+            artifacts.push(Artifact {
+                path: display(&file),
+                source: model.source.clone(),
+                model: model.name.clone(),
+                codec: message.codec.clone(),
+                fingerprint: message.fingerprint,
+                sha256: buildgraph::digest(&contents),
+            });
+            files.push(PlannedFile {
+                path: file,
+                contents,
+                timestamped: true,
+            });
+        }
+    }
+
+    let shared: Vec<Shared> = files
+        .iter()
+        .filter(|file| {
+            matches!(
+                file.path.file_name().and_then(|name| name.to_str()),
+                Some("runtime.ts") | Some(generator::typescript_handshake::FILE_NAME)
+            )
+        })
+        .map(|file| Shared {
+            path: display(&file.path),
+            sha256: buildgraph::digest(&file.contents),
+            kind: match file.path.file_name().and_then(|name| name.to_str()) {
+                Some("runtime.ts") => "runtime",
+                _ => "handshake",
+            },
+        })
+        .collect();
+
+    Ok((files, artifacts, shared))
+}
+
+/// The TypeScript runtime file: the header, then the RFC-0002 block verbatim.
+fn typescript_runtime_file() -> String {
+    let mut out = generator::Header {
+        note: Some(
+            "The Cyclone runtime - Writer, Reader, DecodeError, Limits - carried\n\
+             verbatim from RFC-0002. Identical in every project cyclonec generates\n\
+             for: nothing in it is derived from your models.",
+        ),
+        ..generator::Header::default()
+    }
+    .render();
+    out.push_str(generator::typescript_runtime::RUNTIME);
+    out
+}
+
+// ============================================================= JavaScript plan
+
+/// The JavaScript half of [`plan`] - identical in shape to
+/// [`plan_typescript`], and for the same reason: TypeScript and JavaScript
+/// share one annotation concept and one [`crate::ir`] walk, so the only
+/// difference between the two plans is which [`generator`] backend renders
+/// the files.
+///
+/// # Errors
+///
+/// A model with `Array<Array<T>>`, or two codecs that would collide on one
+/// file name - see [`plan_typescript`].
+fn plan_javascript(options: &Options, schema: &Schema) -> Result<BackendPlan, String> {
+    for model in &schema.models {
+        generator::javascript::check_no_nested_arrays(model)?;
+    }
+
+    let locations: std::collections::BTreeMap<String, generator::javascript::ModelLocation> =
+        model_specifiers(options, schema)
+            .into_iter()
+            .map(|(name, specifier)| (name, generator::javascript::ModelLocation { specifier }))
+            .collect();
+    let imports = generator::javascript::Imports {
+        locations: &locations,
+    };
+
+    let mut seen_files: BTreeSet<String> = BTreeSet::new();
+    for model in &schema.models {
+        for message in &model.messages {
+            let name = generator::javascript::file_name(&model.name, &message.codec);
+            if !seen_files.insert(name.clone()) {
+                return Err(format!(
+                    "two codecs would both be generated as `{name}` - rename one of the models \
+                     or codecs involved"
+                ));
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    let mut artifacts = Vec::new();
+
+    files.push(PlannedFile {
+        path: options.out.join("runtime.js"),
+        contents: javascript_runtime_file(),
+        timestamped: true,
+    });
+
+    let handshake = generator::javascript_handshake::handshake_file(
+        schema,
+        options.validate_message_fingerprint,
+    )?;
+    files.push(PlannedFile {
+        path: options.out.join(generator::javascript_handshake::FILE_NAME),
+        contents: handshake,
+        timestamped: true,
+    });
+
+    for model in &schema.models {
+        for message in &model.messages {
+            let file = options.out.join(generator::javascript::file_name(
+                &model.name,
+                &message.codec,
+            ));
+            let contents = generator::javascript::codec_file(model, message, &imports);
+
+            artifacts.push(Artifact {
+                path: display(&file),
+                source: model.source.clone(),
+                model: model.name.clone(),
+                codec: message.codec.clone(),
+                fingerprint: message.fingerprint,
+                sha256: buildgraph::digest(&contents),
+            });
+            files.push(PlannedFile {
+                path: file,
+                contents,
+                timestamped: true,
+            });
+        }
+    }
+
+    let shared: Vec<Shared> = files
+        .iter()
+        .filter(|file| {
+            matches!(
+                file.path.file_name().and_then(|name| name.to_str()),
+                Some("runtime.js") | Some(generator::javascript_handshake::FILE_NAME)
+            )
+        })
+        .map(|file| Shared {
+            path: display(&file.path),
+            sha256: buildgraph::digest(&file.contents),
+            kind: match file.path.file_name().and_then(|name| name.to_str()) {
+                Some("runtime.js") => "runtime",
+                _ => "handshake",
+            },
+        })
+        .collect();
+
+    Ok((files, artifacts, shared))
+}
+
+/// The JavaScript runtime file: the header, then the RFC-0002 block verbatim.
+fn javascript_runtime_file() -> String {
+    let mut out = generator::Header {
+        note: Some(
+            "The Cyclone runtime - Writer, Reader, DecodeError, Limits - carried\n\
+             verbatim from RFC-0002. Identical in every project cyclonec generates\n\
+             for: nothing in it is derived from your models.",
+        ),
+        ..generator::Header::default()
+    }
+    .render();
+    out.push_str(generator::javascript_runtime::RUNTIME);
+    out
+}
+
+/// Where each model's own class can be reached from, as an ES module
+/// specifier - shared by [`plan_typescript`] and [`plan_javascript`], since
+/// both resolve a model's location the same way.
+///
+/// `--model-path` (`options.model_path`), if given, replaces every model's
+/// specifier uniformly with one shared module - a barrel file re-exporting
+/// every model - the same "one string overrides every model at once"
+/// meaning `--model-path` has for Rust's module path and Go's import path.
+/// The default reads `model.source` (already the project-root-relative path
+/// `cyclonec` was pointed at) and computes a relative specifier from `--out`
+/// to it, the way any two ES modules address each other.
+fn model_specifiers(
+    options: &Options,
+    schema: &Schema,
+) -> std::collections::BTreeMap<String, String> {
+    schema
+        .models
+        .iter()
+        .map(|model| {
+            let specifier = match &options.model_path {
+                Some(prefix) => prefix.clone(),
+                None => relative_module_specifier(&options.out, &model.source),
+            };
+            (model.name.clone(), specifier)
+        })
+        .collect()
+}
+
+/// The ES module specifier a file in `out` uses to reach `source` - a
+/// project-root-relative, `/`-separated path with its own extension.
+/// Relative, without an extension, and always starting with `./` or `../`:
+/// a bare specifier (`"models/player"`) resolves as a package name under
+/// Node's module resolution, which this is never meant to be.
+fn relative_module_specifier(out: &Path, source: &str) -> String {
+    let source_path = Path::new(source);
+    let out_components: Vec<_> = out.components().collect();
+    let source_dir_components: Vec<_> = source_path
+        .parent()
+        .map(|parent| parent.components().collect())
+        .unwrap_or_default();
+
+    let mut common = 0;
+    while common < out_components.len()
+        && common < source_dir_components.len()
+        && out_components[common] == source_dir_components[common]
+    {
+        common += 1;
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    for _ in common..out_components.len() {
+        parts.push("..".to_owned());
+    }
+    for component in &source_dir_components[common..] {
+        parts.push(component.as_os_str().to_string_lossy().into_owned());
+    }
+
+    let stem = source_path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| source.to_owned());
+    parts.push(stem);
+
+    let joined = parts.join("/");
+    if joined.starts_with("..") {
+        joined
+    } else {
+        format!("./{joined}")
+    }
+}
+
 /// Writes (or, with `check`, only inspects) everything the plan holds.
 ///
 /// Returns whether the tree on disk is - or now is - what the plan says.
@@ -1445,6 +1778,8 @@ fn walk(
                 || extension == "cxx"
                 || extension == "c"
                 || extension == "h"
+                || extension == "ts"
+                || extension == "js"
         });
         if recognised && !is_generated(&path) {
             sources.push((root.to_path_buf(), path));

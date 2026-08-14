@@ -21,12 +21,15 @@
 //! is what [`rust`]'s lexer is for, and it is the only reason this is a scanner
 //! and not a substring search.
 //!
-//! Rust, Go, C#, GDScript, C++ and C are read today, by six independent
-//! scanners ([`rust`], [`go`], [`csharp`], [`gdscript`], [`cpp`], [`c`]) into
-//! the identical [`Model`] shape - and nothing downstream of [`crate::ir`]
-//! cares which one produced it, because the IR is where a schema stops being
-//! source and starts being a schema. A seventh language is a seventh module
-//! here, dispatched on its extension in [`parse`] below.
+//! Rust, Go, C#, GDScript, C++, C and TypeScript/JavaScript are read today,
+//! by seven independent scanners ([`rust`], [`go`], [`csharp`], [`gdscript`],
+//! [`cpp`], [`c`], [`typescript`]) into the identical [`Model`] shape - and
+//! nothing downstream of [`crate::ir`] cares which one produced it, because
+//! the IR is where a schema stops being source and starts being a schema. A
+//! further language is a further module here, dispatched on its extension in
+//! [`parse`] below. [`typescript`] alone covers two extensions (`.ts` and
+//! `.js`): TypeScript and JavaScript share one Cyclone annotation concept, so
+//! one scanner reads both.
 
 pub mod c;
 pub mod cpp;
@@ -34,6 +37,7 @@ pub mod csharp;
 pub mod gdscript;
 pub mod go;
 pub mod rust;
+pub mod typescript;
 
 use std::path::{Path, PathBuf};
 
@@ -60,9 +64,9 @@ impl std::fmt::Display for Error {
 ///
 /// `path` picks the scanner - `.go` reads Go, `.cs` reads C#, `.gd` reads
 /// GDScript, `.hpp`/`.cpp`/`.cc`/`.cxx` reads C++, `.c`/`.h` reads C,
-/// everything else reads Rust - and is carried into the models (for
-/// `schema.json` and the build graph) and into error messages; nothing else
-/// about it decides content.
+/// `.ts`/`.js` reads TypeScript/JavaScript, everything else reads Rust - and
+/// is carried into the models (for `schema.json` and the build graph) and
+/// into error messages; nothing else about it decides content.
 ///
 /// `.h` reads as C, not C++: the two share no other extension, and a C
 /// project's models live in headers as often as not, so a C++ project's
@@ -80,6 +84,7 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
         Some("gd") => gdscript::parse(path, text),
         Some("hpp") | Some("cpp") | Some("cc") | Some("cxx") => cpp::parse(path, text),
         Some("c") | Some("h") => c::parse(path, text),
+        Some("ts") | Some("js") => typescript::parse(path, text),
         _ => rust::parse(path, text),
     }
 }

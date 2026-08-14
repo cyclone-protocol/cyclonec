@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "CommonJS",
+        "moduleResolution": "Node10",
+        "strict": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "outDir": "dist",
+        "rootDir": "."
+    },
+    "include": ["src/**/*.ts", "smoke_test.ts"]
+}

@@ -4,12 +4,13 @@
 //! Message  →  Field  →  statement
 //! ```
 //!
-//! Rust, Go, C#, GDScript, C++ and C are generated today - each its own
-//! module plus its own runtime constant ([`rust`]/[`rust_runtime`],
-//! [`go`]/[`go_runtime`], [`csharp`]/[`csharp_runtime`],
-//! [`gdscript`]/[`gdscript_runtime`], [`cpp`]/[`cpp_runtime`],
-//! [`c`]/[`c_runtime`]) - and nothing above [`crate::ir`] moves for a
-//! seventh.
+//! Rust, Go, C#, GDScript, C++, C, TypeScript and JavaScript are generated
+//! today - each its own module plus its own runtime constant
+//! ([`rust`]/[`rust_runtime`], [`go`]/[`go_runtime`],
+//! [`csharp`]/[`csharp_runtime`], [`gdscript`]/[`gdscript_runtime`],
+//! [`cpp`]/[`cpp_runtime`], [`c`]/[`c_runtime`],
+//! [`typescript`]/[`typescript_runtime`], [`javascript`]/[`javascript_runtime`])
+//! - and nothing above [`crate::ir`] moves for a further one.
 //!
 //! # What a run writes
 //!
@@ -65,8 +66,14 @@ pub mod go;
 pub mod go_handshake;
 pub mod go_runtime;
 pub mod handshake;
+pub mod javascript;
+pub mod javascript_handshake;
+pub mod javascript_runtime;
 pub mod rust;
 pub mod rust_runtime;
+pub mod typescript;
+pub mod typescript_handshake;
+pub mod typescript_runtime;
 
 use crate::ir::WireType;
 use crate::model::pascal_case;

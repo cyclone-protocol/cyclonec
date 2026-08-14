@@ -15,26 +15,31 @@
 //! `//cyclone:model` directive and `cyclone:"..."` / `codec:"..."` struct
 //! tags, C#'s `[Network]` / `[Codec(...)]` attributes, GDScript's
 //! `# cyclone:model` / `# cyclone:TYPE` comment directives - GDScript has no
-//! attribute syntax a user can extend - or C++/C's shared `CYCLONE_MODEL` /
+//! attribute syntax a user can extend - C++/C's shared `CYCLONE_MODEL` /
 //! `CYCLONE_CODEC(...)` / `CYCLONE_FIELD(TYPE)` macros, which expand to
-//! nothing) and writes the `encode` / `decode` calls that go with them, then
-//! exits, the way `protoc` does.
+//! nothing, or TypeScript/JavaScript's `// CYCLONE_MODEL` /
+//! `// CYCLONE_CODEC(...)` / `// CYCLONE_FIELD(TYPE)` comment directives -
+//! neither language has anything usable without a decorator or a runtime
+//! dependency, which the brief forbids) and writes the `encode` / `decode`
+//! calls that go with them, then exits, the way `protoc` does.
 //!
 //! What it writes reads and writes **your** types. There is no DTO, no wire
 //! struct, no mapper, no registry and no reflection: `encode` takes a
 //! `&Player` (Go: `*Player`, C#: `Player`, GDScript: `Player`, C++:
-//! `const Player&`, C: `const Player *`), `decode` takes a `&mut Player`
-//! (Go: `*Player`, returning `error`; C#: `ref Player`, throwing on failure;
-//! GDScript: `Player`, returning a `DecodeError` or `null`; C++: `Player&`,
-//! returning a `DecodeError`; C: `Player *`, returning a
-//! `CycloneDecodeError`), and the bytes in between are RFC-0002's, produced
-//! by a runtime block that is copied out unchanged rather than derived per
-//! model.
+//! `const Player&`, C: `const Player *`, TypeScript/JavaScript: `Player`),
+//! `decode` takes a `&mut Player` (Go: `*Player`, returning `error`; C#:
+//! `ref Player`, throwing on failure; GDScript: `Player`, returning a
+//! `DecodeError` or `null`; C++: `Player&`, returning a `DecodeError`; C:
+//! `Player *`, returning a `CycloneDecodeError`; TypeScript/JavaScript:
+//! `Player`, throwing a `DecodeError`), and the bytes in between are
+//! RFC-0002's, produced by a runtime block that is copied out unchanged
+//! rather than derived per model.
 //!
-//! Rust, Go, C#, GDScript, C++ and C are read by six independent scanners
-//! into the identical [`model::Model`] shape, so a schema written in any of
-//! them produces the same codec names, the same field routing, and the same
-//! bytes on the wire - see [`parser`] and [`generator`].
+//! Rust, Go, C#, GDScript, C++, C, TypeScript and JavaScript are read by
+//! independent scanners into the identical [`model::Model`] shape, so a
+//! schema written in any of them produces the same codec names, the same
+//! field routing, and the same bytes on the wire - see [`parser`] and
+//! [`generator`].
 //!
 //! # What this version adds
 //!

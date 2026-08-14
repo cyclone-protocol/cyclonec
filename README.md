@@ -7,14 +7,16 @@ source annotation  →  scanner/parser  →  model discovery  →  codec generat
 ```
 
 `cyclonec` is not a compiler and not a runtime. It reads Cyclone attributes out
-of your Rust, Go, C#, GDScript, C++ or C sources - `#[network]` / `#[codec(...)]`,
-Go's `//cyclone:model` directive and struct tags, C#'s `[Network]` /
-`[Codec(...)]` attributes, GDScript's `# cyclone:model` / `# cyclone:TYPE`
-comment directives, or C++/C's shared `CYCLONE_MODEL` / `CYCLONE_CODEC(...)` /
-`CYCLONE_FIELD(TYPE)` macros - and writes the `encode` / `decode` calls that go
-with them, then exits, the way `protoc` does. One run reads one language; a
-project with more than one gets one `cyclone.toml` (and one `--src`/`--out`)
-per language.
+of your Rust, Go, C#, GDScript, C++, C, TypeScript or JavaScript sources -
+`#[network]` / `#[codec(...)]`, Go's `//cyclone:model` directive and struct
+tags, C#'s `[Network]` / `[Codec(...)]` attributes, GDScript's `# cyclone:model`
+/ `# cyclone:TYPE` comment directives, C++/C's shared `CYCLONE_MODEL` /
+`CYCLONE_CODEC(...)` / `CYCLONE_FIELD(TYPE)` macros, or TypeScript/JavaScript's
+shared `// CYCLONE_MODEL` / `// CYCLONE_CODEC(...)` / `// CYCLONE_FIELD(TYPE)`
+comment directives - and writes the `encode` / `decode` calls that go with
+them, then exits, the way `protoc` does. One run reads one language; a project
+with more than one gets one `cyclone.toml` (and one `--src`/`--out`) per
+language.
 
 What it writes reads and writes **your** types:
 
@@ -140,14 +142,18 @@ a parse error in Godot itself - so, like Go, it says them with a comment
 directive too; C++ and C have no attribute syntax cyclonec can extend either
 (and no comment-directive convention to fall back on the way Go and GDScript
 do), so they say them with three macros a small header defines to expand to
-nothing - the same header, and the same three macros, for both:
+nothing - the same header, and the same three macros, for both; TypeScript and
+JavaScript have neither attributes nor macros usable without a decorator or a
+runtime dependency (the brief this backend was built against forbids both), so
+- like Go and GDScript - they say them with a comment directive, read the same
+way for both languages:
 
-| | Rust | Go | C# | GDScript | C++ / C |
-|-|------|----|----|----------|-----|
-| this type is a model | `#[network]` | `//cyclone:model` | `[Network]` | `# cyclone:model` | `CYCLONE_MODEL` |
-| generate these codecs | `#[codec(edge, unity)]` | `//cyclone:model codec=edge,unity` | `[Codec("edge", "unity")]` | `# cyclone:model codec=edge,unity` | `CYCLONE_CODEC("edge", "unity")` |
-| this field's wire type | `#[network(u32)]` | `` `cyclone:"u32"` `` | `[Network("u32")]` | `# cyclone:u32` | `CYCLONE_FIELD(u32)` |
-| this field's codecs | `#[codec(edge)]` | `` `codec:"edge"` `` | `[Codec("edge")]` | `# cyclone:u32 codec=edge` | `CYCLONE_CODEC("edge")` |
+| | Rust | Go | C# | GDScript | C++ / C | TypeScript / JavaScript |
+|-|------|----|----|----------|-----|-----|
+| this type is a model | `#[network]` | `//cyclone:model` | `[Network]` | `# cyclone:model` | `CYCLONE_MODEL` | `// CYCLONE_MODEL` |
+| generate these codecs | `#[codec(edge, unity)]` | `//cyclone:model codec=edge,unity` | `[Codec("edge", "unity")]` | `# cyclone:model codec=edge,unity` | `CYCLONE_CODEC("edge", "unity")` | `// CYCLONE_CODEC("edge", "unity")` |
+| this field's wire type | `#[network(u32)]` | `` `cyclone:"u32"` `` | `[Network("u32")]` | `# cyclone:u32` | `CYCLONE_FIELD(u32)` | `// CYCLONE_FIELD(u32)` |
+| this field's codecs | `#[codec(edge)]` | `` `codec:"edge"` `` | `[Codec("edge")]` | `# cyclone:u32 codec=edge` | `CYCLONE_CODEC("edge")` | `// CYCLONE_CODEC("edge")` |
 
 ```rust
 #[network]
@@ -288,7 +294,37 @@ struct DeviceState
 };
 ```
 
-All six generate exactly two codecs - `…EdgeCodec` (`id`/`ID`/`Id`,
+```typescript
+// CYCLONE_MODEL
+// CYCLONE_CODEC("edge", "unity")
+class DeviceState {
+    // CYCLONE_FIELD(u32)
+    // CYCLONE_CODEC("edge", "unity")
+    Id: number = 0;
+
+    // CYCLONE_FIELD(f32)
+    // CYCLONE_CODEC("edge")
+    Temperature: number = 0;
+
+    // CYCLONE_FIELD(string)
+    // CYCLONE_CODEC("unity")
+    DisplayName: string = "";
+
+    // A network field in no codec: written by none of them.
+    // CYCLONE_FIELD(u32)
+    Unrouted: number = 0;
+
+    // Not on the wire at all.
+    Cache: string = "";
+}
+```
+
+JavaScript writes the identical directives, with every type annotation
+dropped - `Id;` in place of `Id: number = 0;` - and means exactly the same
+thing: the host type is never consulted in either language, only
+`CYCLONE_FIELD`'s own argument is.
+
+All eight generate exactly two codecs - `…EdgeCodec` (`id`/`ID`/`Id`,
 `temperature`) and `…UnityCodec` (`id`/`ID`/`Id`, `display_name`) - never a
 third, never one fewer.
 
@@ -316,7 +352,11 @@ GDScript needs nothing extra either, for the same reason Go doesn't: a
 compiler until `cyclonec` reads it. C++ and C both need the same small header
 defining `CYCLONE_MODEL`, `CYCLONE_FIELD` and `CYCLONE_CODEC` to expand to
 nothing - again a dependency of your models, never of the generated code, and
-the one file the two backends actually share.
+the one file the two backends actually share. TypeScript and JavaScript need
+nothing extra at all, for the same reason Go and GDScript don't: a
+`// CYCLONE_...` comment is already valid source in both with no meaning to
+`tsc`, a bundler, or Node until `cyclonec` reads it - no decorator, and no
+package to install.
 
 ---
 
@@ -526,6 +566,77 @@ and compound literals) and nothing later.
 
 ---
 
+## TypeScript
+
+TypeScript needs no external project file the way Go needs `go.mod` - a
+generated codec reaches your model class through an ordinary ES `import`,
+computed straight from the model's own source path, the same "no project file
+needed" simplicity GDScript has but with real per-file paths instead of one
+global namespace:
+
+- **A `class`, generated against directly - never a DTO.** `encode`/`decode`
+  are `static` methods on a generated `PlayerEdgeCodec`, taking and mutating
+  the exact class your source declares:
+  `PlayerEdgeCodec.encode(writer, value)`, `PlayerEdgeCodec.decode(reader,
+  value)`. Nothing is ever copied into an intermediate shape.
+- **`bigint`, not `number`, for `i64`/`u64`.** A JS `number` is an IEEE 754
+  double, exact only up to 2^53 - short of a full 64-bit range - so `i64` and
+  `u64` fields, and every fingerprint and per-frame envelope value, are
+  `bigint` here and nowhere else. Every other primitive maps the way you would
+  expect: `u32`/`i32`/`f32`/`f64`/small integers all to `number`, `string` to
+  `string`, `bool` to `boolean`, `bytes` to `Uint8Array`.
+- **A relative `import`, computed from your source layout.** By default a
+  generated codec's `import` is a relative path from `--out` to the model's
+  own source file - `src/generated/player_edge.ts` importing `Player` from
+  `src/models/player.ts` writes `import { Player } from
+  "../models/player";`. `--model-path` overrides it with one shared module
+  specifier for every model at once (a barrel file re-exporting each of
+  them), the same "one string overrides every model" meaning it has for Go's
+  import path and C#'s namespace.
+- **A nested model is constructed with `new` if it is not already there.**
+  Unlike a Rust or Go struct field, nothing guarantees a TypeScript class
+  field already holds an instance before `decode` reaches it - so a bare
+  nested-model field (and each array-of-model element) is constructed with
+  `new ModelName()` first. This needs the nested class to have a public,
+  parameterless constructor - the same requirement Rust's version has (a
+  nested model must implement `Default`), enforced by the language there and
+  by the caller here.
+- **Exceptions, not `Result`.** `decode` throws `DecodeError` on failure; the
+  RFC-0002 §9.1 policy is identical - `reader.fieldAbsent()` at every field
+  boundary, throwing only for a field that started and ran out.
+
+`Array<Array<T>>` is refused for the same reason it is everywhere but Rust.
+This backend *is* compiled and run in this project's own CI, with `tsc`
+installed from the fixture's own `package.json`, via a small hand-written
+smoke test (`tests/fixtures-ts/smoke_test.ts`).
+
+---
+
+## JavaScript
+
+The JavaScript backend is TypeScript's, with every type annotation erased -
+`@param`/`@returns` JSDoc comments in their place - and one difference that is
+not cosmetic: **the generated file is meant to be run directly**, by Node's
+own ESM loader or a browser's, neither of which resolves an extensionless
+relative specifier the way `tsc` or a bundler would. So every `import` this
+backend writes carries an explicit `.js` extension
+(`import { Player } from "../models/player.js";`), where TypeScript's does
+not.
+
+A JavaScript codec file also imports less than its TypeScript counterpart: a
+JS function parameter carries no type, so the model a codec *belongs to* is
+never imported at all (nothing in `PlayerEdgeCodec` ever spells `Player` by
+name) - only a model this file actually constructs with `new` (a nested field,
+or an array of them) is. Otherwise every rule TypeScript's section above
+states - the `bigint` mapping, the relative-import computation, constructing
+an absent nested model, throwing `DecodeError`, refusing `Array<Array<T>>` -
+applies unchanged, because both backends walk the identical IR message (see
+`src/ir.rs`); only the surface syntax differs. This backend needs no build
+step in CI at all - its committed fixture is simply run with `node`
+(`tests/fixtures-js/smoke_test.js`).
+
+---
+
 ## Decoding, and version skew
 
 RFC-0002 §9.1 says a byte stream that ends **exactly on a field boundary** is
@@ -563,8 +674,10 @@ own - its codec asks the same question of each of its own fields.
 ## Fingerprints
 
 Every message - a model rendered by one codec - has a fingerprint: SHA-256 over
-a fully specified canonical text, so that Rust, Go, C#, C++ and C produce the
-same 32 bytes from the same schema. `handshake.rs` publishes them:
+a fully specified canonical text, so that Rust, Go, C#, C++, C, TypeScript and
+JavaScript produce the same 32 bytes from the same schema (see
+`tests/cross_language.rs`, which checks exactly that). `handshake.rs` publishes
+them:
 
 ```rust
 pub const CYCLONE_SCHEMA_FINGERPRINT: u64 = 0x6D1B58906FA09FFA;
@@ -872,17 +985,27 @@ cyclonec/
 │   │                           src/generated/*.h; built with gcc and its
 │   │                           smoke test actually run in CI, for the same
 │   │                           reason as the C++ fixture
+│   ├── fixtures-ts/            the same, in TypeScript - package.json,
+│   │                           tsconfig.json, src/models/*.ts,
+│   │                           src/generated/*.ts; built with tsc and its
+│   │                           smoke test actually run in CI
+│   ├── fixtures-js/            the same, in JavaScript - src/models/*.js,
+│   │                           src/generated/*.js; no build step - its
+│   │                           smoke test is run directly with node
+│   ├── cross_language.rs       one schema, read through every parser, proving
+│   │                           every language fingerprints it identically
 │   └── vectors/cyclone-vectors.json
 ├── SPEC-FINGERPRINT.md         normative: the canonical form
 └── MIGRATION.md                what changed from cyclonec_old, and why
 ```
 
-A seventh target language is a `parser/<lang>.rs` and a `generator/<lang>.rs` +
+A further target language is a `parser/<lang>.rs` and a `generator/<lang>.rs` +
 `generator/<lang>_runtime.rs` pair - see [`parser/go.rs`](src/parser/go.rs) and
-[`generator/go.rs`](src/generator/go.rs) (or their C#, GDScript, C++ and C
-counterparts) for what that looked like the last five times. Nothing above
-`ir.rs` moved: schema, fingerprints, compatibility and the build graph are
-language-independent by construction, exactly as designed.
+[`generator/go.rs`](src/generator/go.rs) (or their C#, GDScript, C++, C,
+TypeScript and JavaScript counterparts) for what that looked like the last
+seven times. Nothing above `ir.rs` moved: schema, fingerprints, compatibility
+and the build graph are language-independent by construction, exactly as
+designed.
 
 ---
 
@@ -915,10 +1038,26 @@ cargo test
   backend - one file per codec in a shared namespace, the model header
   `#include`d by its own source path, `--model-path` overriding the
   namespace but never that `#include` path, a mixed Rust/C++ `--src`
-  refused - and the C backend - one file per codec plus one free-function
+  refused - the C backend - one file per codec plus one free-function
   file per model, the model header `#include`d by its own source path,
   `--model-path` proven to have no effect (there is no namespace to
-  override), a mixed Rust/C `--src` refused.
+  override), a mixed Rust/C `--src` refused - the TypeScript backend -
+  one file per codec, a relative `import` computed from the model's own
+  source path, `--model-path` overriding it with one shared specifier, the
+  brief's own `DeviceState` example parsing and generating correctly, every
+  invalid-annotation example from the brief reported rather than silently
+  guessed at, `Array<Array<T>>` refused, a mixed Rust/TypeScript `--src`
+  refused - and the JavaScript backend - the same shape, plus a mixed
+  TypeScript/JavaScript `--src` refused (the two share one annotation
+  concept, but are still two languages as far as `--src`/`--out` is
+  concerned).
+- **`tests/cross_language.rs`** - the brief's own `DeviceState` example, and a
+  second schema covering every primitive, an array and a nested model,
+  parsed through the Rust, TypeScript, JavaScript, Go and C# scanners and
+  built into a schema each: every one fingerprints identically, proving
+  cross-language compatibility is a property of the IR (see
+  `src/fingerprint.rs`) rather than something any one backend has to get
+  right on its own.
 - **`tests/vectors.rs`** - `tests/vectors/cyclone-vectors.json`, the artifact
   another SDK checks itself against: fixed bytes and fixed digests, verified
   through the real generated codecs.
@@ -946,6 +1085,17 @@ cargo test
   `string`/`bytes` field and three kinds of `Array<T>`, exercises §9.1's
   version-skew and truncation cases, calls the generated `_free` functions,
   and checks the three handshake outcomes, all against real compiled output.
+- **`tests/fixtures-ts/`, in CI, built *and* run** - `cargo test` has no
+  TypeScript toolchain either; `.github/workflows/ci.yml` installs `tsc` from
+  the fixture's own `package.json`, type-checks every generated file under
+  `strict`, compiles to CommonJS, and runs `smoke_test.ts`: every primitive
+  at its RFC-0002 width (including a `bigint` `u64`/`i64` round trip), a
+  nested model, three kinds of `Array<T>`, §9.1's version-skew and truncation
+  cases, and the handshake, all against real compiled output.
+- **`tests/fixtures-js/`, in CI, run - no build step at all** - the generated
+  tree is plain ES modules, so `smoke_test.js` (the same checks as the
+  TypeScript fixture's) is simply run with `node`, proving the generated
+  code needs nothing installed to work.
 
 ---
 
