@@ -890,7 +890,7 @@ also how `cyclonec generate` knows to delete the codec of a model you removed.
 ## Commands
 
 ```text
-cyclonec generate [--src <PATH>]... [--out <PATH>] [--model-path <PATH>] [--check] [-q]
+cyclonec generate [--src <PATH>]... [--out <PATH>] [--model-path <PATH>] [--check] [--watch] [-q]
 cyclonec compat --base <SCHEMA> [--head <SCHEMA>]
 cyclonec ci --base-ref <REF>
 cyclone-inspect --schema <SCHEMA> --message <NAME> (--file <PATH> | --hex <HEX>)
@@ -900,11 +900,60 @@ cyclone-inspect --schema <SCHEMA> --message <NAME> (--file <PATH> | --hex <HEX>)
 |---|---|
 | `generate` | read source, report what changed, write the tree |
 | `generate --check` | write nothing; exit 1 if anything on disk is out of date |
+| `generate --watch` | generate once, then keep regenerating as source changes, until stopped |
 | `compat` | compare a base schema against the current source, or against `--head`; exit 1 on `BREAKING` |
 | `ci` | verify, fetch the target branch's schema, compare, exit 1 on `BREAKING` |
 
 There is deliberately no `--codec` flag: a model declares its codecs in the
 source, and asking again on the command line could only ever disagree.
+
+---
+
+## Watch mode
+
+```text
+cyclonec --src src --out generated --watch
+```
+
+`--watch` runs a normal `generate`, then keeps rereading `--src` and
+regenerating as it changes, until the process is stopped. Nothing about what
+gets generated is different from a one-shot `generate` - `--watch` only
+decides when it runs.
+
+Every poll rereads the exact file list `generate` itself would (see
+[`generate::discover`](src/generate.rs)), so `--out` and anything this
+generator wrote are never watched, and never cause a regeneration - a `.rs`
+under `generated/` does not loop back into another run. A save that touches
+the filesystem more than once - a temp file, then a rename, which is how a
+lot of editors save - is coalesced into a single regeneration: a change is
+acted on once the tree has stopped changing for a moment, not on the first
+event a save produces.
+
+An invalid model or annotation is reported and watched past, not a reason to
+stop:
+
+```text
+[cyclonec] error: src/models/player.rs:4: model 'Player' field 'id': `Vec<u32>` is not a Cyclone type
+[cyclonec] watching for changes...
+```
+
+Fixing the file regenerates it on the next save, same as any other change.
+`cyclone.toml` and CLI overrides apply exactly as they do outside watch mode
+(see [Commands](#commands)); `--check` does not combine with `--watch`, since
+one only ever reports and the other always writes.
+
+Regeneration itself rereads every source file, not only the one that
+changed - one model's fields can name another's regardless of which file
+declared it, and a fingerprint is computed over the whole schema, so nothing
+short of a full reparse is a correct answer. What *is* incremental is the
+write: `apply` compares each generated file's new contents against what is
+already on disk and only rewrites the ones that changed, so editing one
+model in practice still only touches that model's own codecs.
+
+There is no background process, no daemon, and no thread left running after
+`--watch` is stopped: it is one process, polling in its own loop on its own
+thread, and terminating it - the normal way, e.g. Ctrl-C - ends the loop with
+it.
 
 ---
 
@@ -925,7 +974,9 @@ cyclonec/
 │   │   ├── csharp.rs           lexer + scanner for [Network] / [Codec(...)]
 │   │   ├── gdscript.rs         scanner for # cyclone:model / # cyclone:TYPE comments
 │   │   ├── cpp.rs              lexer + scanner for CYCLONE_MODEL / CYCLONE_CODEC(...) / CYCLONE_FIELD(...)
-│   │   └── c.rs                the same, minus namespace/class/access-specifier handling
+│   │   ├── c.rs                the same, minus namespace/class/access-specifier handling
+│   │   └── typescript.rs       lexer + scanner for // CYCLONE_MODEL / CYCLONE_CODEC(...) /
+│   │                           CYCLONE_FIELD(...) comments - one scanner for both .ts and .js
 │   ├── model.rs                what the scanner collected
 │   ├── ir.rs                   the Cyclone IR - the source of truth
 │   ├── fingerprint.rs          the canonical form, and SHA-256 over it
@@ -933,6 +984,7 @@ cyclonec/
 │   ├── compat.rs               CURRENT / COMPATIBLE / BREAKING
 │   ├── buildgraph.rs           .cyclone/build-graph.json
 │   ├── generate.rs             discover → parse → IR → render → compare → write
+│   ├── watch.rs                --watch: poll, diff, settle, regenerate - see Watch mode above
 │   ├── generator/
 │   │   ├── rust.rs             one message → one file
 │   │   ├── rust_runtime.rs     the RFC-0002 block, as one constant
@@ -951,13 +1003,22 @@ cyclonec/
 │   │   ├── cpp_handshake.rs    the fingerprint constants, C++
 │   │   ├── c.rs                one message → one header (free functions), C
 │   │   ├── c_runtime.rs        the RFC-0002 block, as one constant, C
-│   │   └── c_handshake.rs      the fingerprint constants, C
+│   │   ├── c_handshake.rs      the fingerprint constants, C
+│   │   ├── typescript.rs       one message → one file, TypeScript
+│   │   ├── typescript_runtime.rs   the RFC-0002 block, as one constant, TypeScript
+│   │   ├── typescript_handshake.rs the fingerprint constants, TypeScript
+│   │   ├── javascript.rs       one message → one file, JavaScript
+│   │   ├── javascript_runtime.rs   the RFC-0002 block, as one constant, JavaScript
+│   │   └── javascript_handshake.rs the fingerprint constants, JavaScript
 │   ├── inspect.rs              cyclone-inspect
 │   ├── json.rs                 written by hand: key order is authored
 │   ├── sha256.rs               written by hand: a hash must not have a version
 │   └── timestamp.rs
 ├── tests/
 │   ├── cli.rs                  the real binaries, over real files
+│   ├── watch.rs                --watch, driven at the library level: modification,
+│   │                           creation, deletion, a parse error fixed, one save that
+│   │                           fires twice, the output directory never feeding back in
 │   ├── generated.rs            the committed Rust generated tree, compiled and run
 │   ├── vectors.rs              the cross-SDK vectors, checked
 │   ├── fixtures/               a small Rust project, laid out like a real one:
@@ -1050,7 +1111,18 @@ cargo test
   refused - and the JavaScript backend - the same shape, plus a mixed
   TypeScript/JavaScript `--src` refused (the two share one annotation
   concept, but are still two languages as far as `--src`/`--out` is
-  concerned).
+  concerned) - and `--watch`, once, through the real binary: it starts,
+  performs its initial generation, regenerates after a real edit, and exits
+  promptly when sent the normal termination signal.
+- **`tests/watch.rs`** - `--watch`'s own scenarios, driven directly against
+  `cyclonec::watch::run` rather than through a subprocess per case, so the
+  whole set runs in well under a second: a source file modified, created, or
+  deleted regenerates (or removes) exactly the codec it affects; an invalid
+  model is reported and watched past, then regenerated once fixed; nothing
+  in `--out` is ever watched, so generating never triggers another
+  generation; and two filesystem writes from one logical save (a temp file,
+  then a rename, e.g.) are settled into a single regeneration of the final
+  state, never a wasted one of the intermediate state on the way there.
 - **`tests/cross_language.rs`** - the brief's own `DeviceState` example, and a
   second schema covering every primitive, an array and a nested model,
   parsed through the Rust, TypeScript, JavaScript, Go and C# scanners and

@@ -7,6 +7,7 @@ use cyclonec::compat::{self, Verdict};
 use cyclonec::generate::{self, Options};
 use cyclonec::ir::Schema;
 use cyclonec::schema;
+use cyclonec::watch;
 
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os().skip(1)) {
@@ -26,6 +27,7 @@ fn main() -> ExitCode {
             println!("cyclonec {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
+        cli::Command::Generate(arguments) if arguments.watch => run_watch(&arguments),
         cli::Command::Generate(arguments) => run_generate(&arguments),
         cli::Command::Compat(arguments) => run_compat(&arguments),
         cli::Command::Ci(arguments) => run_ci(&arguments),
@@ -99,6 +101,31 @@ fn run_generate(arguments: &GenerateArgs) -> Result<ExitCode, String> {
         }
     }
 
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `cyclonec generate --watch` - generate once, then keep doing it.
+///
+/// Deliberately its own function rather than a branch inside `run_generate`:
+/// the two share `Options::resolve`, but nothing past that - watch mode never
+/// prints the previous run's compatibility report on every save (noisy for
+/// no reason mid-edit; `cyclonec generate` on its own remains the place for
+/// that), and this way `--watch`'s presence can never change what
+/// `run_generate` itself does when it is absent.
+fn run_watch(arguments: &GenerateArgs) -> Result<ExitCode, String> {
+    let options = Options::resolve(&arguments.paths)?;
+    watch::run(
+        &options,
+        arguments.quiet,
+        watch::DEFAULT_POLL_INTERVAL,
+        watch::DEFAULT_SETTLE_INTERVAL,
+        // No signal handler to install: this loop is synchronous and single
+        // threaded, so the OS's own default disposition for SIGINT/SIGTERM -
+        // terminate the process - already leaves nothing running in the
+        // background. `should_stop` exists for callers (tests, chiefly) that
+        // want a controlled stop instead of an external signal.
+        || false,
+    )?;
     Ok(ExitCode::SUCCESS)
 }
 

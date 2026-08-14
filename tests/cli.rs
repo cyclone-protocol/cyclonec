@@ -4,7 +4,8 @@
 //! asserted is what a user gets - not what an internal function returns.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 // ===================================================================== harness
 
@@ -64,6 +65,12 @@ fn stderr(output: &Output) -> String {
 fn read(directory: &Path, path: &str) -> String {
     std::fs::read_to_string(directory.join(path))
         .unwrap_or_else(|error| panic!("read {path}: {error}"))
+}
+
+/// [`read`], without the panic - for a file a background `--watch` process
+/// may not have written yet.
+fn read_opt(directory: &Path, path: &str) -> Option<String> {
+    std::fs::read_to_string(directory.join(path)).ok()
 }
 
 /// Rewrites `Player` in the copied fixture, which is how every evolution test
@@ -2120,4 +2127,118 @@ fn the_js_generated_tree_matches_the_committed_fixture() {
             "{path} in tests/fixtures-js/ is out of date - regenerate it"
         );
     }
+}
+
+// ==================================================================== --watch
+//
+// `tests/watch.rs` drives `cyclonec::watch::run` directly and covers each
+// scenario (creation, deletion, a parse error fixed, one save that fires
+// twice, the output directory never feeding back in) far faster than a real
+// subprocess could. What only a real subprocess proves is that `--watch`,
+// typed on an actual command line, actually starts, actually regenerates,
+// and actually stops on the normal termination signal - so that much is
+// covered here, once, the way the rest of this file covers everything else.
+
+/// Spawns `cyclonec` with `arguments` and returns immediately, without
+/// waiting for it to exit - unlike [`cyclonec`], which is for commands that
+/// are expected to finish on their own.
+fn spawn(directory: &Path, arguments: &[&str]) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_cyclonec"))
+        .current_dir(directory)
+        .args(arguments)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn cyclonec")
+}
+
+fn wait_until(mut condition: impl FnMut() -> bool, timeout: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        if condition() {
+            return true;
+        }
+        if start.elapsed() >= timeout {
+            return condition();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Sends `child` the normal termination signal - `SIGTERM` on Unix, the only
+/// signal Windows' `TerminateProcess` amounts to on the rest - and waits for
+/// it to exit. Panics if it has not within `timeout`: a `--watch` process
+/// that is still there is one that is hanging, or has left something of
+/// itself running in the background, either of which is exactly what a
+/// "shuts down cleanly" test exists to catch.
+fn terminate_and_wait(mut child: Child, timeout: Duration) {
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        const SIGTERM: i32 = 15;
+        unsafe {
+            kill(child.id() as i32, SIGTERM);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+
+    let start = Instant::now();
+    loop {
+        if child.try_wait().expect("try_wait").is_some() {
+            return;
+        }
+        assert!(
+            start.elapsed() < timeout,
+            "cyclonec --watch did not exit within {timeout:?} of being sent the normal \
+             termination signal"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn watch_generates_immediately_regenerates_on_change_and_shuts_down_on_signal() {
+    let directory = project("watch-real-binary");
+    let child = spawn(&directory, &["--watch", "-q"]);
+
+    assert!(
+        wait_until(
+            || read_opt(&directory, "src/generated/player_edge.rs").is_some(),
+            Duration::from_secs(10)
+        ),
+        "cyclonec --watch never produced its initial generation"
+    );
+
+    rewrite_player(
+        &directory,
+        "    #[network(u32)]\n    #[codec(edge)]\n    pub id: u32,\n\n    \
+         #[network(f64)]\n    #[codec(edge)]\n    pub x: f64,\n",
+    );
+    assert!(
+        wait_until(
+            || read_opt(&directory, "src/generated/player_edge.rs")
+                .is_some_and(|text| text.contains("write_f64")),
+            Duration::from_secs(10)
+        ),
+        "cyclonec --watch never regenerated after src/models/player.rs changed"
+    );
+
+    terminate_and_wait(child, Duration::from_secs(10));
+}
+
+#[test]
+fn watch_and_check_are_refused_together() {
+    let directory = project("watch-and-check-refused");
+    let output = cyclonec(&directory, &["generate", "--watch", "--check"]);
+    assert!(!output.status.success());
+    let message = stderr(&output);
+    assert!(
+        message.contains("--watch") && message.contains("--check"),
+        "{message}"
+    );
 }
