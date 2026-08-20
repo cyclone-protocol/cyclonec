@@ -2,7 +2,7 @@
 // DO NOT EDIT MANUALLY
 // fingerprint: sha256:b496f724e6b520cee1d5bbe6c9bd2744a1b160fcf473033b50867b355e4b2ca8
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-20T06:05:20Z
+// generated-at: 2026-08-20T07:06:31Z
 //
 // Every fingerprint this schema publishes, and the handshake that compares
 // them. Generated - never edit, and never hand-maintain a copy of these

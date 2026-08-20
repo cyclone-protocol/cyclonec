@@ -694,7 +694,7 @@ fn plan_csharp(
     let mut artifacts = Vec::new();
 
     files.push(PlannedFile {
-        path: options.out.join("runtime.cs"),
+        path: options.out.join(generator::csharp::RUNTIME_FILE_NAME),
         contents: csharp_runtime_file(&namespace),
         timestamped: true,
     });
@@ -738,14 +738,15 @@ fn plan_csharp(
         .filter(|file| {
             matches!(
                 file.path.file_name().and_then(|name| name.to_str()),
-                Some("runtime.cs") | Some(generator::csharp_handshake::FILE_NAME)
+                Some(generator::csharp::RUNTIME_FILE_NAME)
+                    | Some(generator::csharp_handshake::FILE_NAME)
             )
         })
         .map(|file| Shared {
             path: display(&file.path),
             sha256: buildgraph::digest(&file.contents),
             kind: match file.path.file_name().and_then(|name| name.to_str()) {
-                Some("runtime.cs") => "runtime",
+                Some(generator::csharp::RUNTIME_FILE_NAME) => "runtime",
                 _ => "handshake",
             },
         })
@@ -1523,6 +1524,27 @@ fn relative_module_specifier(out: &Path, source: &str) -> String {
 pub fn apply(plan: &Plan, check: bool, quiet: bool) -> Result<bool, String> {
     let mut current = true;
 
+    // Obsolete files go first, before anything is written. On a case-insensitive
+    // filesystem - Windows, macOS by default - a file that was renamed only in
+    // case is the *same* file on disk, so removing after writing would delete
+    // what this run just produced. `obsolete` never names a file the plan also
+    // writes, so nothing here can remove a file that is still wanted.
+    for path in &plan.obsolete {
+        if check {
+            eprintln!(
+                "stale: {} is generated from a model that no longer exists",
+                display(path)
+            );
+            current = false;
+            continue;
+        }
+        std::fs::remove_file(path)
+            .map_err(|error| format!("cannot remove {}: {error}", display(path)))?;
+        if !quiet {
+            eprintln!("cyclonec: removed {}", display(path));
+        }
+    }
+
     for file in &plan.files {
         let existing = std::fs::read_to_string(&file.path).ok();
         let unchanged = existing.as_deref().is_some_and(|existing| {
@@ -1558,22 +1580,6 @@ pub fn apply(plan: &Plan, check: bool, quiet: bool) -> Result<bool, String> {
             .map_err(|error| format!("cannot write {}: {error}", display(&file.path)))?;
         if !quiet {
             eprintln!("cyclonec: {}", display(&file.path));
-        }
-    }
-
-    for path in &plan.obsolete {
-        if check {
-            eprintln!(
-                "stale: {} is generated from a model that no longer exists",
-                display(path)
-            );
-            current = false;
-            continue;
-        }
-        std::fs::remove_file(path)
-            .map_err(|error| format!("cannot remove {}: {error}", display(path)))?;
-        if !quiet {
-            eprintln!("cyclonec: removed {}", display(path));
         }
     }
 

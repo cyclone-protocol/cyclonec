@@ -2,40 +2,44 @@
 // DO NOT EDIT MANUALLY
 // source: src/models/Player.cs
 // model: Player
-// codec: unity
-// fingerprint: sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657
+// codec: edge
+// fingerprint: sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-20T06:05:20Z
+// generated-at: 2026-08-20T07:06:31Z
 
 namespace Generated
 {
 
-/// <summary>The <c>unity</c> codec for <see cref="Player"/>, generated from its Cyclone attributes.</summary>
+/// <summary>The <c>edge</c> codec for <see cref="Player"/>, generated from its Cyclone attributes.</summary>
 /// <remarks>
 /// The wire layout, in declaration order (RFC-0002 §5.1):
 /// <list type="number">
 /// <item><description><c>Id</c>: <c>u32</c></description></item>
+/// <item><description><c>X</c>: <c>f32</c></description></item>
+/// <item><description><c>Y</c>: <c>f32</c></description></item>
 /// </list>
 /// </remarks>
-public static class PlayerUnityCodec
+public static class PlayerEdgeCodec
 {
     /// <summary>This message's name: <c>Model.codec</c>.</summary>
-    public const string MessageName = "Player.unity";
+    public const string MessageName = "Player.edge";
 
     /// <summary>This message's stable id, derived from its name alone.</summary>
-    public const uint MessageId = 0xF4716BBE;
+    public const uint MessageId = 0x432AB486;
 
     /// <summary>This message's wire-contract fingerprint - the same value
     /// <c>Handshake.cs</c> publishes, and the one a peer compares against.</summary>
-    public const ulong Fingerprint = 0xEB9B9E10AA5F77DC;
+    public const ulong Fingerprint = 0x1C6D09808C8BA4CA;
 
-    /// <summary>Writes the <c>unity</c> fields of <paramref name="value"/>, in declaration order.</summary>
+    /// <summary>Writes the <c>edge</c> fields of <paramref name="value"/>, in declaration order.</summary>
     public static void Encode(Writer writer, Models.Player value)
     {
         writer.WriteU32(value.Id);
+        writer.WriteF32(value.X);
+        writer.WriteF32(value.Y);
     }
 
-    /// <summary>Reads the <c>unity</c> fields into <paramref name="value"/>, in declaration order.</summary>
+    /// <summary>Reads the <c>edge</c> fields into <paramref name="value"/>, in declaration order.</summary>
     /// <remarks>
     /// Fields this codec does not carry are left as they were, which is what lets one
     /// model be split across several codecs.
@@ -47,6 +51,8 @@ public static class PlayerUnityCodec
     public static void Decode(ref Reader reader, ref Models.Player value)
     {
         value.Id = reader.FieldAbsent() ? 0 : reader.ReadU32();
+        value.X = reader.FieldAbsent() ? 0f : reader.ReadF32();
+        value.Y = reader.FieldAbsent() ? 0f : reader.ReadF32();
     }
 }
 

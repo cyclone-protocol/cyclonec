@@ -23,7 +23,7 @@ use crate::model::pascal_case;
 use crate::schema::hex64;
 
 /// The file name, relative to the output directory.
-pub const FILE_NAME: &str = "handshake.cs";
+pub const FILE_NAME: &str = "Handshake.cs";
 
 /// Renders `Handshake.cs`.
 ///

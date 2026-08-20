@@ -46,7 +46,6 @@
 //! implementation would need.
 
 use crate::ir::{Field, Message, Model, WireType};
-use crate::model::snake_case;
 
 use super::codec_type_name;
 
@@ -219,9 +218,17 @@ fn zero(ty: &WireType) -> &'static str {
     }
 }
 
-/// The generated file name: `Player` + `edge` → `player_edge.cs`.
+/// The runtime file's name, in .NET's own spelling.
+pub const RUNTIME_FILE_NAME: &str = "Runtime.cs";
+
+/// The generated file name: `Player` + `edge` → `PlayerEdgeCodec.cs`.
+///
+/// Named after the type it declares, which is how .NET names a file: one
+/// public type, one file, the same word. Every other backend spells its files
+/// the way its own language does, and none of that reaches the wire - a
+/// fingerprint never sees a file name.
 pub fn file_name(model: &str, codec: &str) -> String {
-    format!("{}_{}.cs", snake_case(model), snake_case(codec))
+    format!("{}.cs", codec_type_name(model, codec))
 }
 
 /// Escapes text embedded inside an XML doc comment's `<c>...</c>`.
@@ -546,7 +553,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    use super::{check_no_nested_arrays, codec_file, file_name, namespace_from_out, Imports};
+    use super::{
+        check_no_nested_arrays, codec_file, codec_type_name, file_name, namespace_from_out, Imports,
+    };
     use crate::ir::Schema;
     use crate::model::{Field, Model};
 
@@ -809,12 +818,19 @@ mod tests {
         );
     }
 
+    /// .NET names a file after the type it declares, so this backend does too -
+    /// unlike Rust's and Go's, whose own languages spell a file in snake_case.
     #[test]
-    fn a_codec_file_is_named_like_the_other_backends() {
-        assert_eq!(file_name("Player", "edge"), "player_edge.cs");
+    fn a_codec_file_is_named_after_the_type_it_declares() {
+        assert_eq!(file_name("Player", "edge"), "PlayerEdgeCodec.cs");
         assert_eq!(
             file_name("PlayerInfo", "orange_pi"),
-            "player_info_orange_pi.cs"
+            "PlayerInfoOrangePiCodec.cs"
+        );
+        assert_eq!(
+            file_name("Player", "edge"),
+            format!("{}.cs", codec_type_name("Player", "edge")),
+            "the file name and the type name must not drift apart"
         );
     }
 

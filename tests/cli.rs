@@ -1105,12 +1105,12 @@ fn cs_generate_writes_one_file_per_model_per_codec_in_one_shared_namespace() {
     assert!(output.status.success(), "{}", stderr(&output));
 
     for file in [
-        "src/generated/runtime.cs",
-        "src/generated/handshake.cs",
-        "src/generated/player_edge.cs",
-        "src/generated/player_unity.cs",
-        "src/generated/player_info_edge.cs",
-        "src/generated/team_edge.cs",
+        "src/generated/Runtime.cs",
+        "src/generated/Handshake.cs",
+        "src/generated/PlayerEdgeCodec.cs",
+        "src/generated/PlayerUnityCodec.cs",
+        "src/generated/PlayerInfoEdgeCodec.cs",
+        "src/generated/TeamEdgeCodec.cs",
     ] {
         let text = read(&directory, file);
         assert!(
@@ -1122,10 +1122,10 @@ fn cs_generate_writes_one_file_per_model_per_codec_in_one_shared_namespace() {
 
     // The model type is qualified by its own namespace - the codec never
     // creates a type of its own.
-    let codec = read(&directory, "src/generated/player_edge.cs");
+    let codec = read(&directory, "src/generated/PlayerEdgeCodec.cs");
     assert!(codec.contains("Models.Player value"), "{codec}");
     // Same namespace as the generated tree: a nested codec is never qualified.
-    let team = read(&directory, "src/generated/team_edge.cs");
+    let team = read(&directory, "src/generated/TeamEdgeCodec.cs");
     assert!(
         team.contains("PlayerInfoEdgeCodec.Encode(writer, value.Captain);"),
         "{team}"
@@ -1162,7 +1162,7 @@ fn cs_model_path_overrides_the_namespace_the_source_declares() {
     let directory = cs_project("cs-model-path");
     cyclonec(&directory, &["generate", "-q", "--model-path", "Game.Wire"]);
 
-    let codec = read(&directory, "src/generated/player_edge.cs");
+    let codec = read(&directory, "src/generated/PlayerEdgeCodec.cs");
     assert!(codec.contains("Game.Wire.Player value"), "{codec}");
 }
 
@@ -1195,8 +1195,8 @@ fn the_cs_generated_tree_matches_the_committed_fixture() {
 
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures-cs");
     for path in [
-        "src/generated/player_edge.cs",
-        "src/generated/handshake.cs",
+        "src/generated/PlayerEdgeCodec.cs",
+        "src/generated/Handshake.cs",
         ".cyclone/schema.json",
     ] {
         let fresh = read(&directory, path);
@@ -2241,4 +2241,46 @@ fn watch_and_check_are_refused_together() {
         message.contains("--watch") && message.contains("--check"),
         "{message}"
     );
+}
+
+/// Upgrading a project generated before C# files were named after their types.
+///
+/// The old tree's `handshake.cs` and `player_edge.cs` are recorded in the build
+/// graph, so the run that renames them has to remove the old names *and* leave
+/// the new ones on disk. On a case-insensitive filesystem those are the same
+/// file, which is why `apply` removes before it writes.
+#[test]
+fn cs_regenerating_over_the_old_lowercase_names_leaves_only_the_new_ones() {
+    let directory = cs_project("cs-rename-upgrade");
+    cyclonec(&directory, &["generate", "-q"]);
+
+    let generated = directory.join("src/generated");
+    let mut names: Vec<String> = std::fs::read_dir(&generated)
+        .expect("read generated")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+
+    assert_eq!(
+        names,
+        [
+            "Handshake.cs",
+            "PlayerEdgeCodec.cs",
+            "PlayerInfoEdgeCodec.cs",
+            "PlayerUnityCodec.cs",
+            "Runtime.cs",
+            "TeamEdgeCodec.cs",
+        ],
+        "no lowercase file may survive the rename"
+    );
+
+    // A second run is a no-op: nothing left to rename, nothing left to remove.
+    let output = cyclonec(&directory, &["generate", "--check"]);
+    assert!(output.status.success(), "{}", stderr(&output));
 }

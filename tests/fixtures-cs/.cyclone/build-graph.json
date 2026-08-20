@@ -12,28 +12,28 @@
       ],
       "outputs": [
         {
-          "path": "src/generated/player_edge.cs",
+          "path": "src/generated/PlayerEdgeCodec.cs",
           "model": "Player",
           "codec": "edge",
           "fingerprint": "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564",
           "sha256": "17ec62a7470855daa1c4dd4bfc68783172643ae6cce66219c33856d317ecd439"
         },
         {
-          "path": "src/generated/player_unity.cs",
+          "path": "src/generated/PlayerUnityCodec.cs",
           "model": "Player",
           "codec": "unity",
           "fingerprint": "sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657",
           "sha256": "80619f12005b16da4277b7d15c3e5e24d65141ab8c1683a8b1fb690c8cb5ba94"
         },
         {
-          "path": "src/generated/player_info_edge.cs",
+          "path": "src/generated/PlayerInfoEdgeCodec.cs",
           "model": "PlayerInfo",
           "codec": "edge",
           "fingerprint": "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c",
           "sha256": "799a41b4f73d95348bdfa34e0217d144a106d1b08238957a6e1974cb2799ea0e"
         },
         {
-          "path": "src/generated/team_edge.cs",
+          "path": "src/generated/TeamEdgeCodec.cs",
           "model": "Team",
           "codec": "edge",
           "fingerprint": "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605",
@@ -44,12 +44,12 @@
   },
   "shared": [
     {
-      "path": "src/generated/runtime.cs",
+      "path": "src/generated/Runtime.cs",
       "kind": "runtime",
       "sha256": "483f9842d1bcb50a5a0dadc7fa4decb3eec20cc965bc00c82e5bad18d41e9e4b"
     },
     {
-      "path": "src/generated/handshake.cs",
+      "path": "src/generated/Handshake.cs",
       "kind": "handshake",
       "sha256": "81de5e2231c8900c6f9d661913b8c8b1fa8ea1711d56ef8b3e5ecff5de06767b"
     }
