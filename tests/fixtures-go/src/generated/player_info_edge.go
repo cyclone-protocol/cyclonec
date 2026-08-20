@@ -3,9 +3,9 @@
 // source: src/models/player.go
 // model: PlayerInfo
 // codec: edge
-// fingerprint: sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168
+// fingerprint: sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T10:34:22Z
+// generated-at: 2026-08-20T06:05:20Z
 
 package generated
 
@@ -28,7 +28,7 @@ const PlayerInfoEdgeCodecMessageID uint32 = 0xC61DC711
 
 // PlayerInfoEdgeCodecFingerprint is this message's wire-contract fingerprint - the same value
 // handshake.go publishes, and the one a peer compares against.
-const PlayerInfoEdgeCodecFingerprint uint64 = 0xA432F144FB89B1EC
+const PlayerInfoEdgeCodecFingerprint uint64 = 0xB34420C17EEFD973
 
 // Encode writes the "edge" fields of value, in declaration order.
 func (PlayerInfoEdgeCodec) Encode(w *Writer, value *models.PlayerInfo) {

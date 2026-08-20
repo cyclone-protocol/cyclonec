@@ -3,9 +3,9 @@
 // source: src/models/player.rs
 // model: Player
 // codec: edge
-// fingerprint: sha256:231dd2d8744fecc3198c9853ffafe18023c93670fe7822c4cd9638fe9eabbe8b
+// fingerprint: sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T09:57:44Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #![allow(dead_code, unused_imports)]
 
@@ -31,7 +31,7 @@ impl PlayerEdgeCodec {
 
     /// This message's wire-contract fingerprint - the same value
     /// `handshake.rs` publishes, and the one a peer compares against.
-    pub const FINGERPRINT: u64 = 0x231DD2D8744FECC3;
+    pub const FINGERPRINT: u64 = 0x1C6D09808C8BA4CA;
 
     /// Writes the `edge` fields of `value`, in declaration order.
     pub fn encode(writer: &mut Writer, value: &Player) {

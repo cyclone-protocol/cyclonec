@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "generator": "cyclonec 0.2.0",
-  "fingerprint": "sha256:56b298a0ba39394db6eb2b952f6d4512ed35756b34248fae33440d0f2d5e31b8",
-  "fingerprint_u64": "0x56B298A0BA39394D",
+  "fingerprint": "sha256:893ffed3be8f593b233a9c4e25e64d20db9560f40ca704e639081ac3ee024870",
+  "fingerprint_u64": "0x893FFED3BE8F593B",
   "models": {
     "DeviceState": {
       "source": "src/models/device_state.js",
-      "fingerprint": "sha256:d58389d19e8108cf4ea0745ea1c7bf7c65d95ef766bb800e98d95efa67316569",
+      "fingerprint": "sha256:cfe3bdf06ecffdbfb47eeb00c33bbec9e4a9f90e88746f95eec8196e3217cfe3",
       "codecs": [
         "edge",
         "unity"
@@ -38,8 +38,8 @@
       "messages": {
         "edge": {
           "id": "0x0038B478",
-          "fingerprint": "sha256:be8bfab8409b6c812c626ac8549a120c45e891bf042dc4b56aab1378cf14c355",
-          "fingerprint_u64": "0xBE8BFAB8409B6C81",
+          "fingerprint": "sha256:08370babd3dd56e18c3c1b1ce28ee9ee222463f6c2348b91e3cf9ba7ee06ecee",
+          "fingerprint_u64": "0x08370BABD3DD56E1",
           "fields": [
             {
               "name": "Id",
@@ -53,8 +53,8 @@
         },
         "unity": {
           "id": "0x5AA2FA85",
-          "fingerprint": "sha256:026be19f15d14cc3377536b17506046a89e5231ed2517a17548c0016f05509ba",
-          "fingerprint_u64": "0x026BE19F15D14CC3",
+          "fingerprint": "sha256:21d6d62074b16fb3901eb8b9bc9a6fc09a3613506416c6ff471ee1fef19fab0b",
+          "fingerprint_u64": "0x21D6D62074B16FB3",
           "fields": [
             {
               "name": "Id",
@@ -70,7 +70,7 @@
     },
     "EveryPrimitive": {
       "source": "src/models/every_primitive.js",
-      "fingerprint": "sha256:02f1e5f4076ebb87d420fa0c3950d63882cba7e14f15ea810947bb5d81b0d1ac",
+      "fingerprint": "sha256:61b3053e2e94f615ef4a10bb1b96aa18e21f2b8748ec8c453cec1e5a9dbf2454",
       "codecs": [
         "edge"
       ],
@@ -170,8 +170,8 @@
       "messages": {
         "edge": {
           "id": "0x97F77FDC",
-          "fingerprint": "sha256:ef55232045a552627eb5b9af577161ba4a5eaf62848885adb6625f031bc07563",
-          "fingerprint_u64": "0xEF55232045A55262",
+          "fingerprint": "sha256:ef0bc8bba9bc855501c2e691f8e65b003ca9f17b860f2693100a8219189ecf7e",
+          "fingerprint_u64": "0xEF0BC8BBA9BC8555",
           "fields": [
             {
               "name": "Flag",
@@ -231,7 +231,7 @@
     },
     "Player": {
       "source": "src/models/player.js",
-      "fingerprint": "sha256:013aff75ac388095b9fd5c394ca53a9c04d43d7c875e88c7fe6ffd50f5bb4603",
+      "fingerprint": "sha256:3523311d4bc56ec09fd8a0defee783a363642f5484023342afe780c62dfa1088",
       "codecs": [
         "edge",
         "unity"
@@ -268,8 +268,8 @@
       "messages": {
         "edge": {
           "id": "0x432AB486",
-          "fingerprint": "sha256:ee4b267575548a077d0875042492f444282502779bd198cfcc6ee8851545f1a4",
-          "fingerprint_u64": "0xEE4B267575548A07",
+          "fingerprint": "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564",
+          "fingerprint_u64": "0x1C6D09808C8BA4CA",
           "fields": [
             {
               "name": "Id",
@@ -287,8 +287,8 @@
         },
         "unity": {
           "id": "0xF4716BBE",
-          "fingerprint": "sha256:293b91b31f6c09852736a76cbabb96a01b4d9ec58036081d26ebed7818d83254",
-          "fingerprint_u64": "0x293B91B31F6C0985",
+          "fingerprint": "sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657",
+          "fingerprint_u64": "0xEB9B9E10AA5F77DC",
           "fields": [
             {
               "name": "Id",
@@ -300,7 +300,7 @@
     },
     "PlayerInfo": {
       "source": "src/models/player.js",
-      "fingerprint": "sha256:d520365f3a499794c809996e539ef5204e413a728c47989985d2b62f3b554a84",
+      "fingerprint": "sha256:a1c3dba922185bbd5a7069d79367f460edd553905a074a12ccafc6daca39c8bc",
       "codecs": [
         "edge"
       ],
@@ -316,8 +316,8 @@
       "messages": {
         "edge": {
           "id": "0xC61DC711",
-          "fingerprint": "sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168",
-          "fingerprint_u64": "0xA432F144FB89B1EC",
+          "fingerprint": "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c",
+          "fingerprint_u64": "0xB34420C17EEFD973",
           "fields": [
             {
               "name": "Level",
@@ -329,7 +329,7 @@
     },
     "Team": {
       "source": "src/models/player.js",
-      "fingerprint": "sha256:9eaf0daca9a9b82df2c059c269e967b0dbc1d26ed7be3b8ebafc2830457e1092",
+      "fingerprint": "sha256:89d79f98b706b2faaf0ec09a51ab08f9ea5fec2cb4cdedc842aa351bc50400df",
       "codecs": [
         "edge"
       ],
@@ -366,8 +366,8 @@
       "messages": {
         "edge": {
           "id": "0x90AF7FE0",
-          "fingerprint": "sha256:3b370e0d3205fcdcdef5062d4485c6441ef42bf901818945a374ef31ddd0f0a1",
-          "fingerprint_u64": "0x3B370E0D3205FCDC",
+          "fingerprint": "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605",
+          "fingerprint_u64": "0x8289219A2DCF8EB9",
           "fields": [
             {
               "name": "Captain",
@@ -391,7 +391,7 @@
     },
     "Telemetry": {
       "source": "src/models/device_state.js",
-      "fingerprint": "sha256:ce20337fc994ab08d1b72336e8299bc6c25d5fd88a35d7bf8cc8ceb3cd0590ff",
+      "fingerprint": "sha256:46ea1aaf117094b4e179d2342ead041d2674e1468a4b0c842f6f2da952e90aaf",
       "codecs": [
         "edge",
         "orange_pi"
@@ -409,8 +409,8 @@
       "messages": {
         "edge": {
           "id": "0x0F9FA7D3",
-          "fingerprint": "sha256:f4d5573bb3116713a0f9d5b3db28332b899da33aa9f5f31e4022a54b0fd1517d",
-          "fingerprint_u64": "0xF4D5573BB3116713",
+          "fingerprint": "sha256:61d7c61c25f19370590ed6d4ae9f04255ee544cd7356f5364fed04da8eab5c98",
+          "fingerprint_u64": "0x61D7C61C25F19370",
           "fields": [
             {
               "name": "Sequence",
@@ -420,8 +420,8 @@
         },
         "orange_pi": {
           "id": "0x9EC1A22C",
-          "fingerprint": "sha256:c735ba3973767efbb6bf9c7ef165b2d6c6a84311b4b6ddd212becf7ed8c10887",
-          "fingerprint_u64": "0xC735BA3973767EFB",
+          "fingerprint": "sha256:f09f1fb38b850fb9d52182717bfe27ff582361468a006ea9f66403f7fd5974f7",
+          "fingerprint_u64": "0xF09F1FB38B850FB9",
           "fields": [
             {
               "name": "Sequence",

@@ -3,9 +3,9 @@
 // source: src/models/device_state.rs
 // model: DeviceState
 // codec: unity
-// fingerprint: sha256:a48e6b15be605bb9d6bd0d1ed1af8c5d588976e5635e1a437bf16409f1a48453
+// fingerprint: sha256:21d6d62074b16fb3901eb8b9bc9a6fc09a3613506416c6ff471ee1fef19fab0b
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T09:57:44Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #![allow(dead_code, unused_imports)]
 
@@ -30,7 +30,7 @@ impl DeviceStateUnityCodec {
 
     /// This message's wire-contract fingerprint - the same value
     /// `handshake.rs` publishes, and the one a peer compares against.
-    pub const FINGERPRINT: u64 = 0xA48E6B15BE605BB9;
+    pub const FINGERPRINT: u64 = 0x21D6D62074B16FB3;
 
     /// Writes the `unity` fields of `value`, in declaration order.
     pub fn encode(writer: &mut Writer, value: &DeviceState) {

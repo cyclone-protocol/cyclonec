@@ -3,9 +3,9 @@
 // source: src/models/device_state.ts
 // model: DeviceState
 // codec: unity
-// fingerprint: sha256:026be19f15d14cc3377536b17506046a89e5231ed2517a17548c0016f05509ba
+// fingerprint: sha256:21d6d62074b16fb3901eb8b9bc9a6fc09a3613506416c6ff471ee1fef19fab0b
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-14T02:42:09Z
+// generated-at: 2026-08-20T06:05:20Z
 
 import { Writer, Reader } from "./runtime";
 import { DeviceState } from "../models/device_state";
@@ -29,7 +29,7 @@ export class DeviceStateUnityCodec {
      * This message's wire-contract fingerprint - the same value
      * `handshake.ts` publishes, and the one a peer compares against.
      */
-    static readonly FINGERPRINT: bigint = 0x026BE19F15D14CC3n;
+    static readonly FINGERPRINT: bigint = 0x21D6D62074B16FB3n;
 
     /** Writes the `unity` fields of `value`, in declaration order. */
     static encode(writer: Writer, value: DeviceState): void {

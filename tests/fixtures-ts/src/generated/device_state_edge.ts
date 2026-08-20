@@ -3,9 +3,9 @@
 // source: src/models/device_state.ts
 // model: DeviceState
 // codec: edge
-// fingerprint: sha256:be8bfab8409b6c812c626ac8549a120c45e891bf042dc4b56aab1378cf14c355
+// fingerprint: sha256:08370babd3dd56e18c3c1b1ce28ee9ee222463f6c2348b91e3cf9ba7ee06ecee
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-14T02:42:09Z
+// generated-at: 2026-08-20T06:05:20Z
 
 import { Writer, Reader } from "./runtime";
 import { DeviceState } from "../models/device_state";
@@ -29,7 +29,7 @@ export class DeviceStateEdgeCodec {
      * This message's wire-contract fingerprint - the same value
      * `handshake.ts` publishes, and the one a peer compares against.
      */
-    static readonly FINGERPRINT: bigint = 0xBE8BFAB8409B6C81n;
+    static readonly FINGERPRINT: bigint = 0x08370BABD3DD56E1n;
 
     /** Writes the `edge` fields of `value`, in declaration order. */
     static encode(writer: Writer, value: DeviceState): void {

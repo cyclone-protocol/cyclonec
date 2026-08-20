@@ -2,9 +2,9 @@
 // DO NOT EDIT MANUALLY
 // source: src/models/player.h
 // model: Player
-// fingerprint: sha256:eb3d461bfb07304c823ae69881f18492109860abaa847c7b260dc6dd43427e5f
+// fingerprint: sha256:78ae9c022001028506e81a92f53e37fc06bc1774aeea6abfc84c509aac9a94c2
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T16:56:17Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #pragma once
 

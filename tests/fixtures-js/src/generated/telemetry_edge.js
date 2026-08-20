@@ -3,9 +3,9 @@
 // source: src/models/device_state.js
 // model: Telemetry
 // codec: edge
-// fingerprint: sha256:f4d5573bb3116713a0f9d5b3db28332b899da33aa9f5f31e4022a54b0fd1517d
+// fingerprint: sha256:61d7c61c25f19370590ed6d4ae9f04255ee544cd7356f5364fed04da8eab5c98
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-14T02:44:35Z
+// generated-at: 2026-08-20T06:05:20Z
 
 /**
  * The `edge` codec for {@link Telemetry}, generated from its Cyclone attributes.
@@ -25,7 +25,7 @@ export class TelemetryEdgeCodec {
      * This message's wire-contract fingerprint - the same value
      * `handshake.js` publishes, and the one a peer compares against.
      */
-    static FINGERPRINT = 0xF4D5573BB3116713n;
+    static FINGERPRINT = 0x61D7C61C25F19370n;
 
     /**
      * Writes the `edge` fields of `value`, in declaration order.

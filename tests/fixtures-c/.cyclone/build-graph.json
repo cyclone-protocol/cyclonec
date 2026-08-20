@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generator": "cyclonec 0.2.0",
-  "schema_fingerprint": "sha256:a245ab0fdedfab12eb8b5220d5be396961a0fa77e9987f567c008d19ffa1f83b",
+  "schema_fingerprint": "sha256:6105d9d673b37e60f2d4620f1695ad4ae63d5cc596d1a41642c7387989abe7ba",
   "sha256_of": "each file with its `// generated-at:` line emptied, so an unchanged schema keeps an unchanged digest",
   "sources": {
     "src/models/player.h": {
@@ -15,29 +15,29 @@
           "path": "src/generated/player_edge.h",
           "model": "Player",
           "codec": "edge",
-          "fingerprint": "sha256:4af533793f819eba2967c62014492be05e74dd2a4d2919a2444e89a385071cc5",
-          "sha256": "c8d6652a67cd3f71522e9dcfdf70a7c22ddbc6028e1002a29eccd815825c5fc3"
+          "fingerprint": "sha256:b6fb9cf5777c645b7b14b4bcdb6b3e60d69109cbc704f6774901c9b63b6e71ac",
+          "sha256": "95e6653d0652a07bd6c775497ff206d00c93b41917e96b9568b87d35bc6ed41b"
         },
         {
           "path": "src/generated/player_unity.h",
           "model": "Player",
           "codec": "unity",
-          "fingerprint": "sha256:61ceea4540133a5303c731226d226529d008b81ccf835171a07a47d2048be6d7",
-          "sha256": "cd3ee0f40b9126a84acb846692d5ae8f9b652ce09ff000413d5cd079b12f2db1"
+          "fingerprint": "sha256:f03393ecb964b75def6a4133f84c20fe09a32c2a4f22a641e582465e37be84bd",
+          "sha256": "3a1bb728574e14b1c41b1eecdbfdc422302a94ec7705eacda2b5290fa3990aca"
         },
         {
           "path": "src/generated/player_info_edge.h",
           "model": "PlayerInfo",
           "codec": "edge",
-          "fingerprint": "sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168",
-          "sha256": "bc8d8b9a0a83c7c97d1ce502735573d511cb758175982f28d25ecfa8671bbbf3"
+          "fingerprint": "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c",
+          "sha256": "2d702e2c311b95aaa1b473086a1646b0b374ecdb25f87e46cb315cdc0facc3ab"
         },
         {
           "path": "src/generated/team_edge.h",
           "model": "Team",
           "codec": "edge",
-          "fingerprint": "sha256:3b370e0d3205fcdcdef5062d4485c6441ef42bf901818945a374ef31ddd0f0a1",
-          "sha256": "c606f2885e2de1556717cbdbd624262c09770f7ce705fd818156adb6e6dd6123"
+          "fingerprint": "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605",
+          "sha256": "0a41fa41688565007e3445147131d56717272cc398365d8846568407dec488d4"
         }
       ]
     }
@@ -56,7 +56,7 @@
     {
       "path": "src/generated/handshake.h",
       "kind": "handshake",
-      "sha256": "1b9f998c3e74c95d9bad3342a70aa36cb10f3c16575f2a9d9bacd485c1c3e59c"
+      "sha256": "cae72f3696aa5125592c60f1a4115fbb0f4bc83f250cc851840ef18b196b0072"
     }
   ]
 }

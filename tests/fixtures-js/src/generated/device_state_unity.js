@@ -3,9 +3,9 @@
 // source: src/models/device_state.js
 // model: DeviceState
 // codec: unity
-// fingerprint: sha256:026be19f15d14cc3377536b17506046a89e5231ed2517a17548c0016f05509ba
+// fingerprint: sha256:21d6d62074b16fb3901eb8b9bc9a6fc09a3613506416c6ff471ee1fef19fab0b
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-14T02:44:35Z
+// generated-at: 2026-08-20T06:05:20Z
 
 /**
  * The `unity` codec for {@link DeviceState}, generated from its Cyclone attributes.
@@ -26,7 +26,7 @@ export class DeviceStateUnityCodec {
      * This message's wire-contract fingerprint - the same value
      * `handshake.js` publishes, and the one a peer compares against.
      */
-    static FINGERPRINT = 0x026BE19F15D14CC3n;
+    static FINGERPRINT = 0x21D6D62074B16FB3n;
 
     /**
      * Writes the `unity` fields of `value`, in declaration order.

@@ -3,9 +3,9 @@
 // source: src/models/device_state.js
 // model: Telemetry
 // codec: orange_pi
-// fingerprint: sha256:c735ba3973767efbb6bf9c7ef165b2d6c6a84311b4b6ddd212becf7ed8c10887
+// fingerprint: sha256:f09f1fb38b850fb9d52182717bfe27ff582361468a006ea9f66403f7fd5974f7
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-14T02:44:35Z
+// generated-at: 2026-08-20T06:05:20Z
 
 /**
  * The `orange_pi` codec for {@link Telemetry}, generated from its Cyclone attributes.
@@ -25,7 +25,7 @@ export class TelemetryOrangePiCodec {
      * This message's wire-contract fingerprint - the same value
      * `handshake.js` publishes, and the one a peer compares against.
      */
-    static FINGERPRINT = 0xC735BA3973767EFBn;
+    static FINGERPRINT = 0xF09F1FB38B850FB9n;
 
     /**
      * Writes the `orange_pi` fields of `value`, in declaration order.

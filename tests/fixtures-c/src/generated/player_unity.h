@@ -3,9 +3,9 @@
 // source: src/models/player.h
 // model: Player
 // codec: unity
-// fingerprint: sha256:61ceea4540133a5303c731226d226529d008b81ccf835171a07a47d2048be6d7
+// fingerprint: sha256:f03393ecb964b75def6a4133f84c20fe09a32c2a4f22a641e582465e37be84bd
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T16:56:17Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #pragma once
 
@@ -27,7 +27,7 @@
 
 static const char *const PlayerUnityCodec_MESSAGE_NAME = "Player.unity";
 static const uint32_t PlayerUnityCodec_MESSAGE_ID = 0xF4716BBEu;
-static const uint64_t PlayerUnityCodec_FINGERPRINT = 0x61CEEA4540133A53ULL;
+static const uint64_t PlayerUnityCodec_FINGERPRINT = 0xF03393ECB964B75DULL;
 
 // Writes the "unity" fields of `*value`, in declaration order. Returns `false` (buffer
 // untouched beyond what was already written) if growing the writer's buffer failed.

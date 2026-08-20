@@ -3,9 +3,9 @@
 # source: src/models/player.gd
 # model: Player
 # codec: edge
-# fingerprint: sha256:231dd2d8744fecc3198c9853ffafe18023c93670fe7822c4cd9638fe9eabbe8b
+# fingerprint: sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564
 # cyclonec-version: 0.2.0
-# generated-at: 2026-08-13T13:15:40Z
+# generated-at: 2026-08-20T06:05:20Z
 
 class_name PlayerEdgeCodec
 
@@ -25,7 +25,7 @@ const MESSAGE_ID: int = 0x432AB486
 
 # This message's wire-contract fingerprint - the same value handshake.gd publishes,
 # and the one a peer compares against.
-const FINGERPRINT: int = (0x231DD2D8 << 32) | 0x744FECC3
+const FINGERPRINT: int = (0x1C6D0980 << 32) | 0x8C8BA4CA
 
 # Writes the "edge" fields of value, in declaration order.
 static func encode(writer: CycloneRuntime.Writer, value: Player) -> void:

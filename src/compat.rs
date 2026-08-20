@@ -205,9 +205,16 @@ fn diff(name: &str, base: &[crate::ir::Field], head: &[crate::ir::Field]) -> Mes
     for index in 0..base.len().max(head.len()) {
         match (base.get(index), head.get(index)) {
             (Some(old), Some(new)) => {
+                // Compared canonically, because that is what a fingerprint
+                // hashes (SPEC-FINGERPRINT.md §3.2). `Id` becoming `id` moves
+                // no byte and changes no fingerprint, so reporting it as a
+                // breaking rename would have `compat` contradict the handshake.
+                let unchanged = crate::fingerprint::canonical_field_name(&old.name)
+                    == crate::fingerprint::canonical_field_name(&new.name)
+                    && old.ty == new.ty;
                 let old = (old.name.clone(), old.ty.spelling());
                 let new = (new.name.clone(), new.ty.spelling());
-                if old != new {
+                if !unchanged {
                     changes.push(Change::Changed { index, old, new });
                 }
             }
@@ -281,9 +288,11 @@ fn classify(changes: &[Change], base_len: usize, head_len: usize) -> (Verdict, S
     } else if reordered(changes) {
         "field order changed".to_owned()
     } else {
-        // Same types, same positions, different names. The bytes did not move,
-        // but a fingerprint hashes field names (SPEC-FINGERPRINT.md §5), so two
-        // peers either side of this change will refuse each other.
+        // Same types, same positions, different names - and different after
+        // canonicalising, so a real rename rather than a change of convention.
+        // The bytes did not move, but a fingerprint hashes field names
+        // (SPEC-FINGERPRINT.md §5), so two peers either side of this change
+        // will refuse each other.
         "field renamed; the bytes are unchanged, but the fingerprint is not, \
          so peers either side of it will refuse each other"
             .to_owned()
@@ -345,6 +354,29 @@ mod tests {
         compare(&schema(base), &schema(head)).messages[0]
             .reason
             .clone()
+    }
+
+    /// Recasing a field changes no fingerprint (SPEC-FINGERPRINT.md §3.2), so
+    /// `compat` must not call it breaking - the two would contradict each
+    /// other, and the fingerprint is the one a handshake acts on.
+    #[test]
+    fn recasing_a_field_is_not_a_change_at_all() {
+        let recased: &[(&str, &str)] = &[("ID", "u32"), ("X", "f32"), ("Y", "f32")];
+        assert_eq!(verdict(V1, recased), Verdict::Current);
+        assert_eq!(
+            schema(V1).message("Player.edge").expect("base").fingerprint,
+            schema(recased)
+                .message("Player.edge")
+                .expect("head")
+                .fingerprint,
+        );
+    }
+
+    #[test]
+    fn a_real_rename_is_still_breaking() {
+        let renamed: &[(&str, &str)] = &[("id", "u32"), ("position_x", "f32"), ("y", "f32")];
+        assert_eq!(verdict(V1, renamed), Verdict::Breaking);
+        assert!(reason(V1, renamed).contains("renamed"));
     }
 
     #[test]

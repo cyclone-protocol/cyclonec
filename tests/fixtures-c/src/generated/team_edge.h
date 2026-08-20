@@ -3,9 +3,9 @@
 // source: src/models/player.h
 // model: Team
 // codec: edge
-// fingerprint: sha256:3b370e0d3205fcdcdef5062d4485c6441ef42bf901818945a374ef31ddd0f0a1
+// fingerprint: sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T16:59:53Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #pragma once
 
@@ -32,7 +32,7 @@
 
 static const char *const TeamEdgeCodec_MESSAGE_NAME = "Team.edge";
 static const uint32_t TeamEdgeCodec_MESSAGE_ID = 0x90AF7FE0u;
-static const uint64_t TeamEdgeCodec_FINGERPRINT = 0x3B370E0D3205FCDCULL;
+static const uint64_t TeamEdgeCodec_FINGERPRINT = 0x8289219A2DCF8EB9ULL;
 
 // Writes the "edge" fields of `*value`, in declaration order. Returns `false` (buffer
 // untouched beyond what was already written) if growing the writer's buffer failed.

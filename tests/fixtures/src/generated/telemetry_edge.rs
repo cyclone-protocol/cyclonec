@@ -3,9 +3,9 @@
 // source: src/models/device_state.rs
 // model: Telemetry
 // codec: edge
-// fingerprint: sha256:b684bfc5812407dcf11859552a4ffe8b52d22a02f2eaee118d896f49406e18c8
+// fingerprint: sha256:61d7c61c25f19370590ed6d4ae9f04255ee544cd7356f5364fed04da8eab5c98
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T09:57:44Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #![allow(dead_code, unused_imports)]
 
@@ -29,7 +29,7 @@ impl TelemetryEdgeCodec {
 
     /// This message's wire-contract fingerprint - the same value
     /// `handshake.rs` publishes, and the one a peer compares against.
-    pub const FINGERPRINT: u64 = 0xB684BFC5812407DC;
+    pub const FINGERPRINT: u64 = 0x61D7C61C25F19370;
 
     /// Writes the `edge` fields of `value`, in declaration order.
     pub fn encode(writer: &mut Writer, value: &Telemetry) {

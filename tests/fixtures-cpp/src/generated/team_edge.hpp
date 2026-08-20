@@ -3,9 +3,9 @@
 // source: src/models/player.hpp
 // model: Team
 // codec: edge
-// fingerprint: sha256:3b370e0d3205fcdcdef5062d4485c6441ef42bf901818945a374ef31ddd0f0a1
+// fingerprint: sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T15:57:34Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #pragma once
 
@@ -37,7 +37,7 @@ struct TeamEdgeCodec {
 
     /// This message's wire-contract fingerprint - the same value
     /// handshake.hpp publishes, and the one a peer compares against.
-    static constexpr std::uint64_t kFingerprint = 0x3B370E0D3205FCDCULL;
+    static constexpr std::uint64_t kFingerprint = 0x8289219A2DCF8EB9ULL;
 
     /// Writes the "edge" fields of `value`, in declaration order.
     static void encode(Writer& writer, const ::models::Team& value) {

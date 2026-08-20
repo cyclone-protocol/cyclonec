@@ -3,9 +3,9 @@
 // source: src/models/player.go
 // model: Player
 // codec: unity
-// fingerprint: sha256:937d3af4cd8eb1e26cef7c768c77601c43b7a3638a350803f04f3c93f6027999
+// fingerprint: sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T10:34:22Z
+// generated-at: 2026-08-20T06:05:20Z
 
 package generated
 
@@ -28,7 +28,7 @@ const PlayerUnityCodecMessageID uint32 = 0xF4716BBE
 
 // PlayerUnityCodecFingerprint is this message's wire-contract fingerprint - the same value
 // handshake.go publishes, and the one a peer compares against.
-const PlayerUnityCodecFingerprint uint64 = 0x937D3AF4CD8EB1E2
+const PlayerUnityCodecFingerprint uint64 = 0xEB9B9E10AA5F77DC
 
 // Encode writes the "unity" fields of value, in declaration order.
 func (PlayerUnityCodec) Encode(w *Writer, value *models.Player) {

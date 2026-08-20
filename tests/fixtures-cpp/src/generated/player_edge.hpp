@@ -3,9 +3,9 @@
 // source: src/models/player.hpp
 // model: Player
 // codec: edge
-// fingerprint: sha256:ee4b267575548a077d0875042492f444282502779bd198cfcc6ee8851545f1a4
+// fingerprint: sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T15:56:37Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #pragma once
 
@@ -35,7 +35,7 @@ struct PlayerEdgeCodec {
 
     /// This message's wire-contract fingerprint - the same value
     /// handshake.hpp publishes, and the one a peer compares against.
-    static constexpr std::uint64_t kFingerprint = 0xEE4B267575548A07ULL;
+    static constexpr std::uint64_t kFingerprint = 0x1C6D09808C8BA4CAULL;
 
     /// Writes the "edge" fields of `value`, in declaration order.
     static void encode(Writer& writer, const ::models::Player& value) {

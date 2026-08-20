@@ -3,9 +3,9 @@
 // source: src/models/device_state.rs
 // model: DeviceState
 // codec: edge
-// fingerprint: sha256:abd1e9ad26cb27552078ba8ef3c7ac2229d94b2004fe699b945f5d2980f49cab
+// fingerprint: sha256:08370babd3dd56e18c3c1b1ce28ee9ee222463f6c2348b91e3cf9ba7ee06ecee
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T09:57:44Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #![allow(dead_code, unused_imports)]
 
@@ -30,7 +30,7 @@ impl DeviceStateEdgeCodec {
 
     /// This message's wire-contract fingerprint - the same value
     /// `handshake.rs` publishes, and the one a peer compares against.
-    pub const FINGERPRINT: u64 = 0xABD1E9AD26CB2755;
+    pub const FINGERPRINT: u64 = 0x08370BABD3DD56E1;
 
     /// Writes the `edge` fields of `value`, in declaration order.
     pub fn encode(writer: &mut Writer, value: &DeviceState) {

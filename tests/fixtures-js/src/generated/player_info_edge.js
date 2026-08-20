@@ -3,9 +3,9 @@
 // source: src/models/player.js
 // model: PlayerInfo
 // codec: edge
-// fingerprint: sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168
+// fingerprint: sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-14T02:44:35Z
+// generated-at: 2026-08-20T06:05:20Z
 
 /**
  * The `edge` codec for {@link PlayerInfo}, generated from its Cyclone attributes.
@@ -25,7 +25,7 @@ export class PlayerInfoEdgeCodec {
      * This message's wire-contract fingerprint - the same value
      * `handshake.js` publishes, and the one a peer compares against.
      */
-    static FINGERPRINT = 0xA432F144FB89B1ECn;
+    static FINGERPRINT = 0xB34420C17EEFD973n;
 
     /**
      * Writes the `edge` fields of `value`, in declaration order.

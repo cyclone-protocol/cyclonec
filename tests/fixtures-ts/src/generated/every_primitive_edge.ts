@@ -3,9 +3,9 @@
 // source: src/models/every_primitive.ts
 // model: EveryPrimitive
 // codec: edge
-// fingerprint: sha256:ef55232045a552627eb5b9af577161ba4a5eaf62848885adb6625f031bc07563
+// fingerprint: sha256:ef0bc8bba9bc855501c2e691f8e65b003ca9f17b860f2693100a8219189ecf7e
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-14T02:42:09Z
+// generated-at: 2026-08-20T06:05:20Z
 
 import { Writer, Reader } from "./runtime";
 import { EveryPrimitive } from "../models/every_primitive";
@@ -40,7 +40,7 @@ export class EveryPrimitiveEdgeCodec {
      * This message's wire-contract fingerprint - the same value
      * `handshake.ts` publishes, and the one a peer compares against.
      */
-    static readonly FINGERPRINT: bigint = 0xEF55232045A55262n;
+    static readonly FINGERPRINT: bigint = 0xEF0BC8BBA9BC8555n;
 
     /** Writes the `edge` fields of `value`, in declaration order. */
     static encode(writer: Writer, value: EveryPrimitive): void {

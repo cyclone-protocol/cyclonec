@@ -3,9 +3,9 @@
 // source: src/models/player.ts
 // model: PlayerInfo
 // codec: edge
-// fingerprint: sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168
+// fingerprint: sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-14T02:42:09Z
+// generated-at: 2026-08-20T06:05:20Z
 
 import { Writer, Reader } from "./runtime";
 import { PlayerInfo } from "../models/player";
@@ -28,7 +28,7 @@ export class PlayerInfoEdgeCodec {
      * This message's wire-contract fingerprint - the same value
      * `handshake.ts` publishes, and the one a peer compares against.
      */
-    static readonly FINGERPRINT: bigint = 0xA432F144FB89B1ECn;
+    static readonly FINGERPRINT: bigint = 0xB34420C17EEFD973n;
 
     /** Writes the `edge` fields of `value`, in declaration order. */
     static encode(writer: Writer, value: PlayerInfo): void {

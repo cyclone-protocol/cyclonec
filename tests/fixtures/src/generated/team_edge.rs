@@ -3,9 +3,9 @@
 // source: src/models/player.rs
 // model: Team
 // codec: edge
-// fingerprint: sha256:1b0bfc430d3291ddab719ab1a90b554508e515a3f5018a01f87b84734d477384
+// fingerprint: sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T09:57:44Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #![allow(dead_code, unused_imports)]
 
@@ -34,7 +34,7 @@ impl TeamEdgeCodec {
 
     /// This message's wire-contract fingerprint - the same value
     /// `handshake.rs` publishes, and the one a peer compares against.
-    pub const FINGERPRINT: u64 = 0x1B0BFC430D3291DD;
+    pub const FINGERPRINT: u64 = 0x8289219A2DCF8EB9;
 
     /// Writes the `edge` fields of `value`, in declaration order.
     pub fn encode(writer: &mut Writer, value: &Team) {

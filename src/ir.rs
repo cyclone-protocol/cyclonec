@@ -300,6 +300,7 @@ impl Schema {
 
         check_nested_codecs(&models)?;
         check_duplicate_fields(&models)?;
+        check_canonical_field_names(&models)?;
 
         // ------------------------------------------------- fingerprints
         let resolved = models.clone();
@@ -421,6 +422,41 @@ fn check_duplicate_fields(models: &[Model]) -> Result<(), String> {
                     "model '{}' declares field '{}' twice",
                     model.name, field.name
                 ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Two fields of one message may not share both a canonical name and a type.
+///
+/// A message's canonical text is a list of `field <index> <name> <type>` lines
+/// (SPEC-FINGERPRINT.md §3.2.1), so swapping two of them changes the text -
+/// and therefore the fingerprint - unless both the name and the type match.
+/// `ID: u32` beside `Id: u32`, which Go and C# both accept, is that case:
+/// reordering the two would be invisible to a handshake, so the schema is
+/// refused rather than hashed over.
+///
+/// Scoped to one codec, because that is the scope a fingerprint has. Two
+/// fields that collide but never share a message cannot mask each other, and
+/// refusing them would only reject a schema that is safe.
+fn check_canonical_field_names(models: &[Model]) -> Result<(), String> {
+    for model in models {
+        for codec in &model.codecs {
+            let mut seen: BTreeMap<(String, String), &str> = BTreeMap::new();
+            for field in model.fields_in(codec) {
+                let canonical = fingerprint::canonical_field_name(&field.name);
+                let key = (canonical.clone(), field.ty.spelling());
+                if let Some(previous) = seen.insert(key, &field.name) {
+                    return Err(format!(
+                        "message '{}.{codec}': fields '{}' and '{}' are both '{canonical}' of \
+                         type {} - a fingerprint could not tell them apart, so rename one",
+                        model.name,
+                        previous,
+                        field.name,
+                        field.ty.spelling()
+                    ));
+                }
             }
         }
     }
@@ -586,5 +622,79 @@ mod tests {
         )])
         .expect_err("duplicate field");
         assert!(error.contains("twice"), "{error}");
+    }
+
+    /// `ID: u32` beside `Id: u32` is legal Go and legal C#, and the canonical
+    /// text spells both `field <i> id u32`. Reordering the two would leave the
+    /// fingerprint alone, so the schema is refused instead of hashed over.
+    #[test]
+    fn two_fields_a_fingerprint_could_not_tell_apart_are_an_error() {
+        let error = Schema::build(&[model(
+            "Player",
+            &["edge"],
+            vec![field("ID", "u32", &["edge"]), field("Id", "u32", &["edge"])],
+        )])
+        .expect_err("collision");
+        assert!(error.contains("Player.edge"), "{error}");
+        assert!(error.contains("both 'id' of type u32"), "{error}");
+
+        let also = Schema::build(&[model(
+            "Player",
+            &["edge"],
+            vec![
+                field("player_id", "u32", &["edge"]),
+                field("playerId", "u32", &["edge"]),
+            ],
+        )])
+        .expect_err("collision");
+        assert!(also.contains("both 'playerid' of type u32"), "{also}");
+    }
+
+    /// The same names with different types are safe: a swap changes the type
+    /// on both lines, so the fingerprint moves. Refusing this would reject a
+    /// schema no handshake can be fooled by.
+    #[test]
+    fn a_shared_canonical_name_with_different_types_is_allowed() {
+        let schema = Schema::build(&[model(
+            "Player",
+            &["edge"],
+            vec![field("ID", "u32", &["edge"]), field("Id", "f32", &["edge"])],
+        )])
+        .expect("build");
+
+        let swapped = Schema::build(&[model(
+            "Player",
+            &["edge"],
+            vec![field("Id", "f32", &["edge"]), field("ID", "u32", &["edge"])],
+        )])
+        .expect("build");
+
+        assert_ne!(
+            schema.message("Player.edge").expect("one").fingerprint,
+            swapped.message("Player.edge").expect("other").fingerprint,
+            "the reorder must still be visible"
+        );
+    }
+
+    /// Scoped to one codec: two fields that collide but never share a message
+    /// cannot mask each other, and a field in no codec shares none at all.
+    #[test]
+    fn a_collision_across_codecs_is_not_a_collision() {
+        Schema::build(&[model(
+            "Player",
+            &["edge", "unity"],
+            vec![
+                field("ID", "u32", &["edge"]),
+                field("Id", "u32", &["unity"]),
+            ],
+        )])
+        .expect("two codecs, one field each");
+
+        Schema::build(&[model(
+            "Player",
+            &["edge"],
+            vec![field("id", "u32", &["edge"]), field("Id", "u32", &[])],
+        )])
+        .expect("the second field is on no wire");
     }
 }

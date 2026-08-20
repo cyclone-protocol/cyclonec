@@ -3,9 +3,9 @@
 // source: src/models/Player.cs
 // model: Player
 // codec: unity
-// fingerprint: sha256:293b91b31f6c09852736a76cbabb96a01b4d9ec58036081d26ebed7818d83254
+// fingerprint: sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T12:43:31Z
+// generated-at: 2026-08-20T06:05:20Z
 
 namespace Generated
 {
@@ -27,7 +27,7 @@ public static class PlayerUnityCodec
 
     /// <summary>This message's wire-contract fingerprint - the same value
     /// <c>Handshake.cs</c> publishes, and the one a peer compares against.</summary>
-    public const ulong Fingerprint = 0x293B91B31F6C0985;
+    public const ulong Fingerprint = 0xEB9B9E10AA5F77DC;
 
     /// <summary>Writes the <c>unity</c> fields of <paramref name="value"/>, in declaration order.</summary>
     public static void Encode(Writer writer, Models.Player value)

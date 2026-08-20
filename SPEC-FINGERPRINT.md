@@ -1,4 +1,4 @@
-# Cyclone Schema Fingerprint - `cyclone-fingerprint/1`
+# Cyclone Schema Fingerprint - `cyclone-fingerprint/2`
 
 **Status:** normative for `cyclonec` 0.2 and every Cyclone SDK that interoperates with it.
 
@@ -54,7 +54,7 @@ No indentation, no alignment, no trailing spaces, no `\r`.
 ### 3.1 A message
 
 ```
-cyclone-fingerprint/1
+cyclone-fingerprint/2
 message <Model>.<codec>
 field <index> <name> <type>
 field <index> <name> <type>
@@ -65,23 +65,89 @@ end
 - `<index>` counts from `0`, in decimal, over the fields **this codec carries**,
   in declaration order. A field the codec does not carry is not present and does
   not consume an index.
-- `<name>` is the field name exactly as the source spells it.
-- `<type>` is section 3.3.
+- `<name>` is the field's **canonical name**, section 3.2 - not the spelling the
+  source used.
+- `<type>` is section 3.4.
 
-### 3.2 A model
+### 3.2 A field name
+
+A field's name is hashed in one spelling, so that a project whose Rust half
+writes `player_id` and whose Go half writes `PlayerID` has one schema and not
+two. `cyclonec` reads one language per run, so the two halves of such a project
+are two annotated sources, each written the way its own language is written;
+under `cyclone-fingerprint/1` they hashed differently and their peers rejected
+each other over a naming convention.
+
+```
+canonical_name = the name with every '_', '-' and ' ' removed,
+                 with A-Z folded to a-z,
+                 and every other character carried through unchanged.
+```
+
+If nothing is left (`_`), the canonical name is the original name.
+
+Only ASCII is folded. Go and C# both accept non-ASCII identifiers, and Unicode
+case folding is locale-sensitive in ways two SDKs can disagree about, so those
+characters pass through byte for byte.
+
+**Word boundaries are deliberately not recovered.** A rule that turned
+`HTTPServer` into `http_server` must also turn `UserIDs` into `user_i_ds`, since
+the two are the same shape - an uppercase run followed by lowercase - and Go's
+`UserIDs` would then stop matching Rust's `user_ids`. Removing the separators
+instead is unambiguous: every implementation reaches the same string without
+having to agree where a word begins.
+
+The price is that two names differing only in separator placement - `notify_url`
+and `notif_yurl` - canonicalise together. Where that could hide a reorder it is
+a generator error (section 3.2.1); everywhere else it is two spellings of one
+field, at one offset, with one type - and the wire never carried the name.
+
+#### 3.2.1 Collisions
+
+**Two fields of one message MUST NOT share both a canonical name and a type
+spelling.** `ID: u32` beside `Id: u32` is legal Go and legal C#, and both render
+as `field <index> id u32`; swapping the two would leave the canonical text - and
+so the fingerprint - unchanged, which is the one thing hashing names exists to
+prevent (section 5). A generator MUST refuse such a schema rather than hash over
+it.
+
+The rule is exactly this wide and no wider. Two fields sharing a canonical name
+but not a type are safe, because a swap moves the type spellings with them and
+the text changes. Two fields sharing both, in codecs that never render them into
+the same message, are safe for the same reason a fingerprint is per-message:
+they never appear in one canonical text. A field in no codec appears in no
+message at all.
+
+The scope is therefore one message. A generator that also enforces the rule over
+a model's whole field list is rejecting schemas no handshake can be fooled by.
+
+#### 3.2.2 Test vectors
+
+| Source spelling | Canonical name |
+|---|---|
+| `id`, `ID`, `Id` | `id` |
+| `player_id`, `playerId`, `PlayerId`, `PlayerID`, `PLAYER_ID`, `player-id`, `__player_id__` | `playerid` |
+| `http_server`, `HttpServer`, `HTTPServer` | `httpserver` |
+| `user_ids`, `UserIds`, `UserIDs` | `userids` |
+| `vec3`, `Vec3`, `vec_3` | `vec3` |
+| `position3D`, `position_3d` | `position3d` |
+| `café_id` | `caféid` |
+| `_`, `__` | `_`, `__` |
+
+### 3.3 A model
 
 The fingerprint of a model's whole declaration - every annotated field, whatever
 codec it joined. Not a wire contract; useful for "did `Player` change?".
 
 ```
-cyclone-fingerprint/1
+cyclone-fingerprint/2
 model <Model>
 field <index> <name> <type>
 ...
 end
 ```
 
-### 3.3 A type
+### 3.4 A type
 
 | Cyclone type | Canonical spelling |
 |---|---|
@@ -97,12 +163,12 @@ end
 (RFC-0002 §5): a nested model contributes its fields to the stream at that
 offset, so a change inside it moves everything after it. The body inserted is
 the *message* body (section 3.1) under the same codec when fingerprinting a
-message, and the *model* body (section 3.2) when fingerprinting a model. The
+message, and the *model* body (section 3.3) when fingerprinting a model. The
 body includes its own `\n` characters; it is hash input, not a format anything
 parses back.
 
 ```
-cyclone-fingerprint/1
+cyclone-fingerprint/2
 message Team.edge
 field 0 captain model<PlayerInfo:message PlayerInfo.edge
 field 0 level u32
@@ -122,14 +188,14 @@ already on the expansion stack (reachable through `Array<T>`), without losing
 the fact that the recursion is there. The stack holds model names, is pushed
 before a body is expanded and popped after.
 
-### 3.4 A schema
+### 3.5 A schema
 
 Every message, by name, with its own digest, **sorted by the message name** as a
 byte-wise ascending string comparison - so the order files happened to be
 discovered in cannot change the answer.
 
 ```
-cyclone-fingerprint/1
+cyclone-fingerprint/2
 schema
 message <name> <lowercase hex digest>
 message <name> <lowercase hex digest>
@@ -137,13 +203,23 @@ message <name> <lowercase hex digest>
 end
 ```
 
-### 3.5 The version tag
+### 3.6 The version tag
 
-`cyclone-fingerprint/1` is inside the hash on purpose. A future canonical form
-is `cyclone-fingerprint/2`, and old and new fingerprints then cannot silently
+`cyclone-fingerprint/2` is inside the hash on purpose. A future canonical form
+is `cyclone-fingerprint/3`, and old and new fingerprints then cannot silently
 compare equal. **Changing the canonical form changes every fingerprint in
 existence** and every deployed peer stops recognising every other one; it is a
 coordinated, versioned, announced act, never a refactor.
+
+| Tag | Canonical form |
+|---|---|
+| `/1` | Field names hashed exactly as the source spelled them. |
+| `/2` | Field names hashed canonically (section 3.2), so that a naming convention is not a schema difference. |
+
+A `/1` peer and a `/2` peer disagree about every fingerprint they hold, so the
+handshake reports `REJECT` between them. That is the intended outcome and the
+reason the tag is hashed: the two are not the same protocol, and no part of
+either is safe to reuse against the other.
 
 ---
 
@@ -194,11 +270,19 @@ on the wire changed - also changes the fingerprint, and peers that could have
 talked will refuse to. That failure is loud, immediate and harmless; the one it
 replaces is silent, permanent and corrupts data. **The choice is deliberate and
 recorded here so that no SDK "fixes" it independently.** An SDK that drops names
-from the canonical form is not implementing `cyclone-fingerprint/1`.
+from the canonical form is not implementing `cyclone-fingerprint/2`.
 
-If a project decides it wants the other trade-off, it is a new canonical form
-(`cyclone-fingerprint/2`) and a coordinated change across every SDK - not a
-per-implementation option.
+`/2` narrows that price to the renames a human meant. Under `/1` the name was
+hashed as written, so `id` in Rust, `ID` in Go and `Id` in C# were three
+schemas - and since `cyclonec` reads one language per run, a project with more
+than one language paid the false positive on every field it declared. Section
+3.2 removes that case without touching the property this section is about: two
+same-typed fields swapped still canonicalise to two different names in two
+different positions, and still mismatch.
+
+If a project decides it wants the other trade-off - no names hashed at all - it
+is a new canonical form (`cyclone-fingerprint/3`) and a coordinated change
+across every SDK, not a per-implementation option.
 
 ---
 
@@ -215,6 +299,7 @@ Against the changes the brief enumerates, for a message:
 | fields reordered (same types) | yes - because names are hashed |
 | a field's wire type changed | yes |
 | a field renamed, nothing else | yes - see section 5 |
+| a field recased or re-underscored (`Id` to `id`, `PlayerID` to `player_id`) | no - see section 3.2 |
 | a nested model changed, anywhere inside | yes |
 | a field added to a codec it did not join | yes, for that codec's message only |
 | a comment, a host-language type, a file moved | no |
@@ -242,7 +327,7 @@ Canonical text for `Player.edge` (`\n` shown as line breaks, and the file ends
 with one):
 
 ```
-cyclone-fingerprint/1
+cyclone-fingerprint/2
 message Player.edge
 field 0 id u32
 field 1 x f32
@@ -251,10 +336,14 @@ end
 ```
 
 ```
-sha256:231dd2d8744fecc3198c9853ffafe18023c93670fe7822c4cd9638fe9eabbe8b
-u64:    0x231DD2D8744FECC3
+sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564
+u64:    0x1C6D09808C8BA4CA
 id:     0x432AB486
 ```
+
+The same three digests come out of the Go struct that spells those fields
+`ID`, `X`, `Y` and the C# class that spells them `Id`, `X`, `Y`: section 3.2 is
+applied before the text above is built, so all three read `field 0 id u32`.
 
 More pinned values - every message of a schema exercising nested models, arrays
 and all thirteen primitives - are in
@@ -267,9 +356,13 @@ which is the artifact another SDK should check itself against.
 
 1. Build the ordered field list per message. Declaration order, always
    (RFC-0002 §5.1) - never reflection order, never memory order.
-2. Render the canonical text exactly as section 3 says.
-3. SHA-256 it.
-4. Check yourself against `tests/vectors/cyclone-vectors.json`. If one digest
+2. Canonicalise each field name (section 3.2) and refuse the schema if two of
+   one message's fields collide (section 3.2.1). Check your canonicaliser
+   against section 3.2.2 first - it is the cheapest thing to get subtly wrong,
+   and it is the reason `/2` exists.
+3. Render the canonical text exactly as section 3 says.
+4. SHA-256 it.
+5. Check yourself against `tests/vectors/cyclone-vectors.json`. If one digest
    differs, the text differs; print your canonical text and diff it against the
    `canonical_example` in that file.
 

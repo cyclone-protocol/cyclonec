@@ -2,9 +2,9 @@
 // DO NOT EDIT MANUALLY
 // source: src/models/player.h
 // model: Team
-// fingerprint: sha256:9eaf0daca9a9b82df2c059c269e967b0dbc1d26ed7be3b8ebafc2830457e1092
+// fingerprint: sha256:89d79f98b706b2faaf0ec09a51ab08f9ea5fec2cb4cdedc842aa351bc50400df
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T16:59:53Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #pragma once
 

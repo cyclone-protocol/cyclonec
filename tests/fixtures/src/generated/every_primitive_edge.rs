@@ -3,9 +3,9 @@
 // source: src/models/every_primitive.rs
 // model: EveryPrimitive
 // codec: edge
-// fingerprint: sha256:8fd59d536dd8a425b252e4c8bebce752ae46b7f64925621dcfc14424c9e63302
+// fingerprint: sha256:ef0bc8bba9bc855501c2e691f8e65b003ca9f17b860f2693100a8219189ecf7e
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T09:57:44Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #![allow(dead_code, unused_imports)]
 
@@ -41,7 +41,7 @@ impl EveryPrimitiveEdgeCodec {
 
     /// This message's wire-contract fingerprint - the same value
     /// `handshake.rs` publishes, and the one a peer compares against.
-    pub const FINGERPRINT: u64 = 0x8FD59D536DD8A425;
+    pub const FINGERPRINT: u64 = 0xEF0BC8BBA9BC8555;
 
     /// Writes the `edge` fields of `value`, in declaration order.
     pub fn encode(writer: &mut Writer, value: &EveryPrimitive) {

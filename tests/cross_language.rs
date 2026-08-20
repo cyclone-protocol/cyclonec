@@ -6,11 +6,13 @@
 //! something any one backend has to arrange; these tests exist to prove it
 //! rather than assume it.
 //!
-//! Field names are hashed (`src/fingerprint.rs` explains why), so a fair
-//! comparison needs the *same* field name spelling in every language - the
-//! same reason the brief's own DeviceState example spells every field
-//! `Id`/`Temperature`/`DisplayName` in both its Rust and its TypeScript
-//! listing, rather than each language's own idiomatic case.
+//! Field names are hashed (`src/fingerprint.rs` explains why), but in their
+//! canonical spelling, so each language may write the same field its own way:
+//! Rust's `player_id`, Go's `PlayerID` and C#'s `PlayerId` are one field and
+//! one fingerprint. That is what
+//! [`each_language_may_spell_a_field_its_own_way`] pins down, and it is the
+//! reason the older tests below - which spell every field identically in every
+//! language - are no longer the only fair comparison available.
 
 use std::path::Path;
 
@@ -158,4 +160,88 @@ fn every_backend_reads_the_same_schema_into_the_same_fingerprints() {
             "{name}'s message id must match Rust's"
         );
     }
+}
+
+/// The case `cyclone-fingerprint/2` exists for: one model, written the way
+/// each language's own convention would write it, is one fingerprint.
+///
+/// `cyclonec` reads one language per run (see the README), so a project with a
+/// Rust server and a Go client has two annotated sources, each idiomatic. Under
+/// `/1` those two hashed differently and the handshake said `Reject` about two
+/// peers whose bytes were identical - which is a naming convention wearing a
+/// schema disagreement's clothes.
+#[test]
+fn each_language_may_spell_a_field_its_own_way() {
+    let rust = build(
+        "player.rs",
+        "#[network]\n#[codec(edge)]\nstruct Player {\n\
+         \t#[network(u32)]\n\t#[codec(edge)]\n\tplayer_id: u32,\n\n\
+         \t#[network(f32)]\n\t#[codec(edge)]\n\tposition_x: f32,\n\n\
+         \t#[network(string)]\n\t#[codec(edge)]\n\tdisplay_name: String,\n}\n",
+    );
+
+    let go = build(
+        "player.go",
+        "package models\n\n//cyclone:model codec=edge\ntype Player struct {\n\
+         \tPlayerID uint32 `cyclone:\"u32\" codec:\"edge\"`\n\
+         \tPositionX float32 `cyclone:\"f32\" codec:\"edge\"`\n\
+         \tDisplayName string `cyclone:\"string\" codec:\"edge\"`\n}\n",
+    );
+
+    let csharp = build(
+        "Player.cs",
+        "[Network]\n[Codec(\"edge\")]\npublic class Player {\n\
+         \t[Network(\"u32\")]\n\t[Codec(\"edge\")]\n\tpublic uint PlayerId;\n\
+         \t[Network(\"f32\")]\n\t[Codec(\"edge\")]\n\tpublic float PositionX;\n\
+         \t[Network(\"string\")]\n\t[Codec(\"edge\")]\n\tpublic string DisplayName;\n}\n",
+    );
+
+    let typescript = build(
+        "player.ts",
+        "// CYCLONE_MODEL\n// CYCLONE_CODEC(\"edge\")\nclass Player {\n\
+         \t// CYCLONE_FIELD(u32)\n\t// CYCLONE_CODEC(\"edge\")\n\tplayerId: number = 0;\n\n\
+         \t// CYCLONE_FIELD(f32)\n\t// CYCLONE_CODEC(\"edge\")\n\tpositionX: number = 0;\n\n\
+         \t// CYCLONE_FIELD(string)\n\t// CYCLONE_CODEC(\"edge\")\n\tdisplayName: string = \"\";\n}\n",
+    );
+
+    for (name, other) in [("Go", &go), ("C#", &csharp), ("TypeScript", &typescript)] {
+        assert_eq!(
+            rust.fingerprint, other.fingerprint,
+            "{name} spells the same schema its own way; the fingerprint must not notice"
+        );
+        assert_eq!(
+            rust.message("Player.edge").expect("Rust").fingerprint,
+            other.message("Player.edge").expect("other").fingerprint,
+            "{name}'s Player.edge must match Rust's"
+        );
+    }
+}
+
+/// The property canonicalising must not cost: a rename a human meant is still
+/// a different schema, and two same-typed fields swapped is still a mismatch.
+#[test]
+fn canonicalising_does_not_blind_the_fingerprint() {
+    let base = build(
+        "player.rs",
+        "#[network]\n#[codec(edge)]\nstruct Player {\n\
+         \t#[network(f32)]\n\t#[codec(edge)]\n\tx: f32,\n\n\
+         \t#[network(f32)]\n\t#[codec(edge)]\n\ty: f32,\n}\n",
+    );
+
+    let renamed = build(
+        "player.rs",
+        "#[network]\n#[codec(edge)]\nstruct Player {\n\
+         \t#[network(f32)]\n\t#[codec(edge)]\n\tposition_x: f32,\n\n\
+         \t#[network(f32)]\n\t#[codec(edge)]\n\ty: f32,\n}\n",
+    );
+
+    let swapped = build(
+        "player.rs",
+        "#[network]\n#[codec(edge)]\nstruct Player {\n\
+         \t#[network(f32)]\n\t#[codec(edge)]\n\ty: f32,\n\n\
+         \t#[network(f32)]\n\t#[codec(edge)]\n\tx: f32,\n}\n",
+    );
+
+    assert_ne!(base.fingerprint, renamed.fingerprint, "a real rename");
+    assert_ne!(base.fingerprint, swapped.fingerprint, "a reorder");
 }

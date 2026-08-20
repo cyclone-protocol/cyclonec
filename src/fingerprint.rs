@@ -23,9 +23,39 @@
 //! ```
 //!
 //! Lines are `\n`-separated, fields are separated by a single space, and the
-//! text always ends in a newline. A field's line is its **index**, its **name**
-//! and its **type spelling** - the three things a decoder positioned at that
-//! offset depends on.
+//! text always ends in a newline. A field's line is its **index**, its
+//! **canonical name** and its **type spelling** - the three things a decoder
+//! positioned at that offset depends on.
+//!
+//! # Why the name is canonicalised
+//!
+//! A field's name is hashed in the one spelling every language agrees on, not
+//! the spelling its source happened to use. `cyclonec` reads one language per
+//! run, so the Rust side of a project writes `player_id` while the Go side
+//! writes `PlayerID` and the C# side writes `PlayerId` - three names for one
+//! field, on a wire that is byte-identical. Hashing them as written made those
+//! three peers reject each other at the handshake, which is a false alarm about
+//! a naming convention dressed up as a schema disagreement.
+//!
+//! The canonical name drops `_`, `-` and spaces and lowercases what is left,
+//! so all three of those spell `playerid` - see [`canonical_field_name`].
+//!
+//! It deliberately does not try to recover *words*. A word-splitting rule has
+//! to answer `UserIDs`, and `HTTPServer` proves there is no answer: the two are
+//! the same shape - an acronym run followed by lowercase - so any rule that
+//! splits `HTTP|Server` also splits `I|Ds`, and Go's `UserIDs` then stops
+//! matching Rust's `user_ids`. Erasing the boundaries instead means every SDK
+//! reaches the same string without having to agree on where a word begins,
+//! which is the same reason [`crate::sha256`] is written out rather than
+//! depended on.
+//!
+//! The price is that two names differing only in where their underscores sit
+//! (`notify_url` and `notif_yurl`) canonicalise together. Where that could hide
+//! a reorder - both in one message, both the same type - [`crate::ir`] rejects
+//! the schema. Everywhere else it is two spellings of one field at one offset
+//! with one type: a label, and the wire never carried the label. What the
+//! canonical name does *not* erase is a real rename, so `x` to `position_x` is
+//! still a different fingerprint.
 //!
 //! A field whose type is another model this run parsed is expanded **inline**,
 //! under the same codec, because that is what the bytes do:
@@ -65,6 +95,9 @@
 //! be told they are on different schemas and reject each other. That is a loud,
 //! immediate, harmless failure, and the alternative is a silent, permanent,
 //! data-corrupting success. `SPEC-FINGERPRINT.md` records the choice.
+//!
+//! Canonicalising the name narrows that price to the renames a human meant.
+//! `Id` to `id` is a convention, not a rename, and no longer costs a handshake.
 
 use crate::ir::{Field, Model, WireType};
 use crate::sha256;
@@ -136,7 +169,24 @@ impl Fingerprint {
 ///
 /// It is inside the hash on purpose: a future canonical form is a different
 /// tag, and old and new fingerprints then cannot silently compare equal.
-const HEADER: &str = "cyclone-fingerprint/1\n";
+///
+/// `/2` canonicalises field names; `/1` hashed them as the source spelled them.
+const HEADER: &str = "cyclone-fingerprint/2\n";
+
+/// The one spelling of a field name that every language agrees on, as
+/// `SPEC-FINGERPRINT.md` §3.2 defines it.
+pub fn canonical_field_name(name: &str) -> String {
+    let canonical: String = name
+        .chars()
+        .filter(|character| !matches!(character, '_' | '-' | ' '))
+        .map(|character| character.to_ascii_lowercase())
+        .collect();
+
+    if canonical.is_empty() {
+        return name.to_owned();
+    }
+    canonical
+}
 
 /// The fingerprint of one wire contract: `model` as rendered by `codec`.
 pub fn message(model: &Model, codec: &str, schema: &[Model]) -> Fingerprint {
@@ -241,7 +291,7 @@ fn write_field(
     text.push_str("field ");
     text.push_str(&index.to_string());
     text.push(' ');
-    text.push_str(&field.name);
+    text.push_str(&canonical_field_name(&field.name));
     text.push(' ');
     write_type(text, &field.ty, codec, schema, stack);
     text.push('\n');
@@ -295,7 +345,7 @@ fn write_type(
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_message, message_id, Fingerprint};
+    use super::{canonical_field_name, canonical_message, message_id, Fingerprint};
     use crate::ir::Schema;
     use crate::model::{Field, Model};
     use std::path::PathBuf;
@@ -343,7 +393,77 @@ mod tests {
 
         assert_eq!(
             canonical_message(model, "edge", &schema.models),
-            "cyclone-fingerprint/1\nmessage Player.edge\nfield 0 id u32\nfield 1 x f32\nend\n"
+            "cyclone-fingerprint/2\nmessage Player.edge\nfield 0 id u32\nfield 1 x f32\nend\n"
+        );
+    }
+
+    /// The whole point of `/2`: the same model, spelled by each language's own
+    /// convention, is one fingerprint. These are the exact spellings the Rust,
+    /// Go and C# fixtures use for `Player.edge`.
+    #[test]
+    fn a_naming_convention_is_not_a_schema_difference() {
+        let rust = player_fingerprint(vec![field("id", "u32"), field("x", "f32")]);
+        let go = player_fingerprint(vec![field("ID", "u32"), field("X", "f32")]);
+        let csharp = player_fingerprint(vec![field("Id", "u32"), field("X", "f32")]);
+        let screaming = player_fingerprint(vec![field("ID_", "u32"), field("X", "f32")]);
+
+        assert_eq!(rust, go);
+        assert_eq!(rust, csharp);
+        assert_eq!(rust, screaming);
+    }
+
+    /// A rename a human meant still costs a handshake - canonicalising names
+    /// narrows the false positive, it does not remove the property.
+    #[test]
+    fn a_real_rename_still_changes_the_fingerprint() {
+        assert_ne!(
+            player_fingerprint(vec![field("x", "f32")]),
+            player_fingerprint(vec![field("position_x", "f32")]),
+        );
+    }
+
+    /// The test vectors `SPEC-FINGERPRINT.md` §3.2 publishes. Every SDK has to
+    /// reproduce this table exactly or its fingerprints are not Cyclone's.
+    #[test]
+    fn a_canonical_name_is_exactly_this() {
+        for (spelling, canonical) in [
+            ("id", "id"),
+            ("ID", "id"),
+            ("Id", "id"),
+            ("player_id", "playerid"),
+            ("playerId", "playerid"),
+            ("PlayerId", "playerid"),
+            ("PlayerID", "playerid"),
+            ("PLAYER_ID", "playerid"),
+            ("player-id", "playerid"),
+            ("__player_id__", "playerid"),
+            ("HTTPServer", "httpserver"),
+            ("http_server", "httpserver"),
+            ("HttpServer", "httpserver"),
+            ("UserIDs", "userids"),
+            ("user_ids", "userids"),
+            ("UserIds", "userids"),
+            ("vec3", "vec3"),
+            ("Vec3", "vec3"),
+            ("vec_3", "vec3"),
+            ("position3D", "position3d"),
+            ("position_3d", "position3d"),
+            ("café_id", "caféid"),
+            ("_", "_"),
+            ("__", "__"),
+        ] {
+            assert_eq!(canonical_field_name(spelling), canonical, "{spelling}");
+        }
+    }
+
+    /// The two things the canonical name must still tell apart, or hashing it
+    /// would be worse than hashing nothing.
+    #[test]
+    fn a_canonical_name_still_separates_what_matters() {
+        assert_ne!(canonical_field_name("x"), canonical_field_name("y"));
+        assert_ne!(
+            canonical_field_name("x"),
+            canonical_field_name("position_x")
         );
     }
 
@@ -354,7 +474,7 @@ mod tests {
         let fingerprint = player_fingerprint(vec![field("id", "u32"), field("x", "f32")]);
         assert_eq!(
             fingerprint.tagged(),
-            "sha256:52a59d63e7b355e52e2877cd0bbdb16301a547cf155d43c22842c3f0f9574383"
+            "sha256:f1ed8779e2a4a35d30067fa88ba1cec15f7417ea9907df5752f06b97a0d93ddc"
         );
     }
 

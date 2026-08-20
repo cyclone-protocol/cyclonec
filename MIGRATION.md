@@ -426,13 +426,44 @@ it can now say precisely, it says:
 | two messages whose ids collide | n/a | reported, with both names |
 | two constants spelled the same | n/a | reported, with both names |
 | two codecs wanting the same module file | n/a | reported, with the file name |
+| one message, two fields with one canonical name and one type (`ID: u32` and `Id: u32`) | n/a | reported, with both names |
 
 Unchanged: a field whose Cyclone type names a model this run never parsed is
 still left to the host compiler to resolve, and a nested field routed into a
 codec the referenced model does not declare is still the one cross-model check
 that runs before anything is written.
 
-### 2.6 Still no dependencies
+### 2.6 Field names are fingerprinted canonically (`cyclone-fingerprint/2`)
+
+`cyclonec` reads one language per run, so a project with a Rust server and a Go
+client has two annotated sources, each written the way its own language is
+written. Under `cyclone-fingerprint/1` the field name was hashed exactly as the
+source spelled it, so Rust's `id`, Go's `ID` and C#'s `Id` were three different
+fingerprints for one wire contract - and the handshake said `REJECT` about peers
+whose bytes were identical.
+
+`/2` hashes the name with `_`, `-` and spaces removed and `A-Z` folded to `a-z`
+(SPEC-FINGERPRINT.md §3.2), so all three read `field 0 id u32` and produce one
+fingerprint. A rename a human meant - `x` to `position_x` - still changes the
+fingerprint; only the convention stops counting.
+
+**Every fingerprint in existence changed with this.** A `/1` peer and a `/2`
+peer reject each other, which is what the version tag inside the hash is for.
+Regenerate every language of a project together, and deploy them together:
+
+```text
+cyclonec generate     # in each language's own project root
+```
+
+Nothing about your models changes and nothing about your bytes changes - the
+generated `encode`/`decode` still read `value.x` in Rust and `value.X` in C#.
+The one new error is two fields of a single message sharing both a canonical
+name and a type - `ID: u32` beside `Id: u32`, legal in Go and in C#, and the one
+arrangement a fingerprint could not tell apart. Sharing a name but not a type,
+or a name and a type but not a message, is not an error: those cannot hide a
+reorder.
+
+### 2.7 Still no dependencies
 
 Not in the generator, and not in what it generates. SHA-256, JSON and the slice
 of TOML that `cyclone.toml` needs are written out in this crate: a dependency is

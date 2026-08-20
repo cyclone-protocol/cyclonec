@@ -3,9 +3,9 @@
 // source: src/models/player.h
 // model: Player
 // codec: edge
-// fingerprint: sha256:4af533793f819eba2967c62014492be05e74dd2a4d2919a2444e89a385071cc5
+// fingerprint: sha256:b6fb9cf5777c645b7b14b4bcdb6b3e60d69109cbc704f6774901c9b63b6e71ac
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T16:56:17Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #pragma once
 
@@ -30,7 +30,7 @@
 
 static const char *const PlayerEdgeCodec_MESSAGE_NAME = "Player.edge";
 static const uint32_t PlayerEdgeCodec_MESSAGE_ID = 0x432AB486u;
-static const uint64_t PlayerEdgeCodec_FINGERPRINT = 0x4AF533793F819EBAULL;
+static const uint64_t PlayerEdgeCodec_FINGERPRINT = 0xB6FB9CF5777C645BULL;
 
 // Writes the "edge" fields of `*value`, in declaration order. Returns `false` (buffer
 // untouched beyond what was already written) if growing the writer's buffer failed.

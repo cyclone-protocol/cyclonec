@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "generator": "cyclonec 0.2.0",
-  "fingerprint": "sha256:3b90e97657794c587e9e63b2584cd5240fe055ac9a9ce48cd2e42a546fe258fe",
-  "fingerprint_u64": "0x3B90E97657794C58",
+  "fingerprint": "sha256:b496f724e6b520cee1d5bbe6c9bd2744a1b160fcf473033b50867b355e4b2ca8",
+  "fingerprint_u64": "0xB496F724E6B520CE",
   "models": {
     "Player": {
       "source": "src/models/player.gd",
-      "fingerprint": "sha256:63bb6dac3fff0735616fc9b456356aa8093477f561a9c6b50745314f86fdff24",
+      "fingerprint": "sha256:3523311d4bc56ec09fd8a0defee783a363642f5484023342afe780c62dfa1088",
       "codecs": [
         "edge",
         "unity"
@@ -43,8 +43,8 @@
       "messages": {
         "edge": {
           "id": "0x432AB486",
-          "fingerprint": "sha256:231dd2d8744fecc3198c9853ffafe18023c93670fe7822c4cd9638fe9eabbe8b",
-          "fingerprint_u64": "0x231DD2D8744FECC3",
+          "fingerprint": "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564",
+          "fingerprint_u64": "0x1C6D09808C8BA4CA",
           "fields": [
             {
               "name": "id",
@@ -62,8 +62,8 @@
         },
         "unity": {
           "id": "0xF4716BBE",
-          "fingerprint": "sha256:759177cebb0af4afd99b0e11f7cc639333fc1a127bab51ff74feda695d76ee11",
-          "fingerprint_u64": "0x759177CEBB0AF4AF",
+          "fingerprint": "sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657",
+          "fingerprint_u64": "0xEB9B9E10AA5F77DC",
           "fields": [
             {
               "name": "id",
@@ -75,7 +75,7 @@
     },
     "PlayerInfo": {
       "source": "src/models/player_info.gd",
-      "fingerprint": "sha256:caea5803942817a494d06c7131486103bedc9fb642c0d288cd315608ffd75135",
+      "fingerprint": "sha256:a1c3dba922185bbd5a7069d79367f460edd553905a074a12ccafc6daca39c8bc",
       "codecs": [
         "edge"
       ],
@@ -91,8 +91,8 @@
       "messages": {
         "edge": {
           "id": "0xC61DC711",
-          "fingerprint": "sha256:81962b09e3bcca4d6f5e160195d3fbe7d5af9e174ddb386474bd0c04284a5647",
-          "fingerprint_u64": "0x81962B09E3BCCA4D",
+          "fingerprint": "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c",
+          "fingerprint_u64": "0xB34420C17EEFD973",
           "fields": [
             {
               "name": "level",
@@ -104,7 +104,7 @@
     },
     "Team": {
       "source": "src/models/team.gd",
-      "fingerprint": "sha256:6ac8cf10a639634522477843ddd8215ad547c205c55a2cfc682afe1b6093129e",
+      "fingerprint": "sha256:89d79f98b706b2faaf0ec09a51ab08f9ea5fec2cb4cdedc842aa351bc50400df",
       "codecs": [
         "edge"
       ],
@@ -141,8 +141,8 @@
       "messages": {
         "edge": {
           "id": "0x90AF7FE0",
-          "fingerprint": "sha256:1b0bfc430d3291ddab719ab1a90b554508e515a3f5018a01f87b84734d477384",
-          "fingerprint_u64": "0x1B0BFC430D3291DD",
+          "fingerprint": "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605",
+          "fingerprint_u64": "0x8289219A2DCF8EB9",
           "fields": [
             {
               "name": "captain",

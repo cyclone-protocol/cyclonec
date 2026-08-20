@@ -3,9 +3,9 @@
 // source: src/models/Player.cs
 // model: PlayerInfo
 // codec: edge
-// fingerprint: sha256:a432f144fb89b1ec9322324f27ddadb099f69de79fc561d03b7ecf45e7545168
+// fingerprint: sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T12:43:31Z
+// generated-at: 2026-08-20T06:05:20Z
 
 namespace Generated
 {
@@ -27,7 +27,7 @@ public static class PlayerInfoEdgeCodec
 
     /// <summary>This message's wire-contract fingerprint - the same value
     /// <c>Handshake.cs</c> publishes, and the one a peer compares against.</summary>
-    public const ulong Fingerprint = 0xA432F144FB89B1EC;
+    public const ulong Fingerprint = 0xB34420C17EEFD973;
 
     /// <summary>Writes the <c>edge</c> fields of <paramref name="value"/>, in declaration order.</summary>
     public static void Encode(Writer writer, Models.PlayerInfo value)

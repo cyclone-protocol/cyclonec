@@ -3,9 +3,9 @@
 # source: src/models/player.gd
 # model: Player
 # codec: unity
-# fingerprint: sha256:759177cebb0af4afd99b0e11f7cc639333fc1a127bab51ff74feda695d76ee11
+# fingerprint: sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657
 # cyclonec-version: 0.2.0
-# generated-at: 2026-08-13T13:15:40Z
+# generated-at: 2026-08-20T06:05:20Z
 
 class_name PlayerUnityCodec
 
@@ -23,7 +23,7 @@ const MESSAGE_ID: int = 0xF4716BBE
 
 # This message's wire-contract fingerprint - the same value handshake.gd publishes,
 # and the one a peer compares against.
-const FINGERPRINT: int = (0x759177CE << 32) | 0xBB0AF4AF
+const FINGERPRINT: int = (0xEB9B9E10 << 32) | 0xAA5F77DC
 
 # Writes the "unity" fields of value, in declaration order.
 static func encode(writer: CycloneRuntime.Writer, value: Player) -> void:

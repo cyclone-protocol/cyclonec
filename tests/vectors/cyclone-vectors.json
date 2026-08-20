@@ -19,41 +19,41 @@
     "digest": "SHA-256 over a canonical UTF-8 text; see SPEC-FINGERPRINT.md",
     "u64": "the first 8 bytes of the digest, big endian",
     "message_id": "the first 4 bytes of SHA-256 of 'cyclone-message-id/1\\n<name>\\n', big endian",
-    "canonical_example": "cyclone-fingerprint/1\nmessage Player.edge\nfield 0 id u32\nfield 1 x f32\nfield 2 y f32\nend\n"
+    "canonical_example": "cyclone-fingerprint/2\nmessage Player.edge\nfield 0 id u32\nfield 1 x f32\nfield 2 y f32\nend\n"
   },
-  "schema_fingerprint": "sha256:6d1b58906fa09ffa831b29a1fd0dbd42c725385554b2f193dafed9c252976059",
+  "schema_fingerprint": "sha256:eb23b6c1c7d3bf85a5fb387efe1e3d310686e0e7698124aaeeef0eaebd0ff8b9",
   "messages": {
     "DeviceState.edge": {
       "id": "0x0038B478",
-      "fingerprint": "sha256:abd1e9ad26cb27552078ba8ef3c7ac2229d94b2004fe699b945f5d2980f49cab"
+      "fingerprint": "sha256:08370babd3dd56e18c3c1b1ce28ee9ee222463f6c2348b91e3cf9ba7ee06ecee"
     },
     "DeviceState.unity": {
       "id": "0x5AA2FA85",
-      "fingerprint": "sha256:a48e6b15be605bb9d6bd0d1ed1af8c5d588976e5635e1a437bf16409f1a48453"
+      "fingerprint": "sha256:21d6d62074b16fb3901eb8b9bc9a6fc09a3613506416c6ff471ee1fef19fab0b"
     },
     "EveryPrimitive.edge": {
       "id": "0x97F77FDC",
-      "fingerprint": "sha256:8fd59d536dd8a425b252e4c8bebce752ae46b7f64925621dcfc14424c9e63302"
+      "fingerprint": "sha256:ef0bc8bba9bc855501c2e691f8e65b003ca9f17b860f2693100a8219189ecf7e"
     },
     "Player.edge": {
       "id": "0x432AB486",
-      "fingerprint": "sha256:231dd2d8744fecc3198c9853ffafe18023c93670fe7822c4cd9638fe9eabbe8b"
+      "fingerprint": "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564"
     },
     "PlayerInfo.edge": {
       "id": "0xC61DC711",
-      "fingerprint": "sha256:81962b09e3bcca4d6f5e160195d3fbe7d5af9e174ddb386474bd0c04284a5647"
+      "fingerprint": "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c"
     },
     "Team.edge": {
       "id": "0x90AF7FE0",
-      "fingerprint": "sha256:1b0bfc430d3291ddab719ab1a90b554508e515a3f5018a01f87b84734d477384"
+      "fingerprint": "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605"
     },
     "Telemetry.edge": {
       "id": "0x0F9FA7D3",
-      "fingerprint": "sha256:b684bfc5812407dcf11859552a4ffe8b52d22a02f2eaee118d896f49406e18c8"
+      "fingerprint": "sha256:61d7c61c25f19370590ed6d4ae9f04255ee544cd7356f5364fed04da8eab5c98"
     },
     "Telemetry.orange_pi": {
       "id": "0x9EC1A22C",
-      "fingerprint": "sha256:3ad024b5ba58d05af96949fa27f119da9db642189aae2dfd671e3eff51ded262"
+      "fingerprint": "sha256:f09f1fb38b850fb9d52182717bfe27ff582361468a006ea9f66403f7fd5974f7"
     }
   },
   "accept": [

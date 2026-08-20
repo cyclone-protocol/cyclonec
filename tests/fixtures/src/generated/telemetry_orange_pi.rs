@@ -3,9 +3,9 @@
 // source: src/models/device_state.rs
 // model: Telemetry
 // codec: orange_pi
-// fingerprint: sha256:3ad024b5ba58d05af96949fa27f119da9db642189aae2dfd671e3eff51ded262
+// fingerprint: sha256:f09f1fb38b850fb9d52182717bfe27ff582361468a006ea9f66403f7fd5974f7
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-13T09:57:44Z
+// generated-at: 2026-08-20T06:05:20Z
 
 #![allow(dead_code, unused_imports)]
 
@@ -29,7 +29,7 @@ impl TelemetryOrangePiCodec {
 
     /// This message's wire-contract fingerprint - the same value
     /// `handshake.rs` publishes, and the one a peer compares against.
-    pub const FINGERPRINT: u64 = 0x3AD024B5BA58D05A;
+    pub const FINGERPRINT: u64 = 0xF09F1FB38B850FB9;
 
     /// Writes the `orange_pi` fields of `value`, in declaration order.
     pub fn encode(writer: &mut Writer, value: &Telemetry) {
