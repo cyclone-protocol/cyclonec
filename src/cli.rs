@@ -1,21 +1,6 @@
-//! Command-line arguments, parsed by hand.
-//!
-//! Three commands, because they are three different jobs with three different
-//! failure modes:
-//!
-//! - `generate` reads source and writes the tree. It **warns** about
-//!   compatibility and never fails for it - a developer breaking their own
-//!   schema on purpose is a normal afternoon.
-//! - `compat` compares two schemas and says what changed. It fails on a
-//!   breaking change, because somebody asked it the question.
-//! - `ci` does what a pull request needs: check the committed schema still
-//!   matches source, fetch the *target branch's* schema, compare, and exit 1 on
-//!   a breaking change.
-
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-/// The usage text, printed by `--help` and on a usage error.
 pub const USAGE: &str = "\
 cyclonec - the official Cyclone source generator
 
@@ -221,39 +206,24 @@ directives with no type annotation at all (`Id;` in place of `Id: number;`)
 and means exactly the same thing.
 ";
 
-/// Where to read from and where to write to - shared by every command that
-/// touches source.
 #[derive(Debug, Default, Clone)]
 pub struct Paths {
-    /// `--src`, empty if the flag was never given.
     pub src: Vec<PathBuf>,
-    /// `--out`, if given.
     pub out: Option<PathBuf>,
-    /// `--model-path`, if given: overrides how a generated codec reaches your
-    /// models - a module path in Rust, an import path in Go, a namespace in
-    /// C# or C++ - in place of the one the source layout (Rust), `go.mod`
-    /// (Go), or the model's own `namespace` (C#, C++) implies. No effect on
-    /// GDScript or C, neither of which has anything to override.
     pub model_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct GenerateArgs {
     pub paths: Paths,
-    /// Report staleness instead of writing.
     pub check: bool,
-    /// Generate once, then keep regenerating on every source change until
-    /// terminated. Never both true alongside `check` - see [`parse`].
     pub watch: bool,
     pub quiet: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct CompatArgs {
-    /// The schema being evolved from.
     pub base: PathBuf,
-    /// The schema being evolved to. `None` reads the current source instead,
-    /// which is what makes this useful before anything has been committed.
     pub head: Option<PathBuf>,
     pub paths: Paths,
     pub quiet: bool,
@@ -261,13 +231,11 @@ pub struct CompatArgs {
 
 #[derive(Debug, Clone)]
 pub struct CiArgs {
-    /// The git ref of the branch this change would merge into.
     pub base_ref: String,
     pub paths: Paths,
     pub quiet: bool,
 }
 
-/// What the command line asked for.
 #[derive(Debug, Clone)]
 pub enum Command {
     Generate(GenerateArgs),
@@ -277,18 +245,12 @@ pub enum Command {
     Version,
 }
 
-/// Parses the command line.
-///
-/// # Errors
-///
-/// An unknown flag, a missing value, or a required argument that was not given.
 pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
     let mut argv: Vec<String> = argv
         .into_iter()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
 
-    // No command at all means `generate`: it is the one that runs every build.
     let command = match argv.first().map(String::as_str) {
         Some("generate") | Some("compat") | Some("ci") => argv.remove(0),
         _ => "generate".to_owned(),

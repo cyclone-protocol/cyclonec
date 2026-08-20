@@ -1,41 +1,8 @@
-//! C# source → [`Model`]s.
-//!
-//! Reads `[Network]` / `[Network("TYPE")]` / `[Codec(...)]` - the C#
-//! counterpart of Rust's `#[network]` / `#[network(TYPE)]` / `#[codec(...)]`,
-//! meant to be used with a small `Cyclone.Network` / `Cyclone.Codec`
-//! attribute pair a project declares for itself (C# has no equivalent of a
-//! proc-macro crate that only exists to be scanned). See [`crate::parser`]
-//! for what this scanner is and is not - it never looks at the C# type beside
-//! the attribute, only at the string inside it, the same way the Rust scanner
-//! never looks at a field's Rust type.
-//!
-//! # Scope
-//!
-//! A model is a top-level `class` or `struct`; nested types are not specially
-//! recognised (this mirrors the Rust scanner's identical non-handling of a
-//! model inside `mod`). A `namespace` is stepped over like any other braces,
-//! its own name recorded separately by [`namespace_name`] for import
-//! qualification - the same job Go's [`super::go::package_name`] does for a
-//! `package` clause.
-//!
-//! Ported from `cyclonec_old`'s C# scanner with its token handling intact -
-//! the same lexer, the same attribute/member walk, the same one error. What is
-//! new is only that each model and each field now carries the file and line it
-//! was read from, which the IR needs for `schema.json`, the build graph, and
-//! diagnostics that point at source rather than at a schema.
-
 use std::path::Path;
 
 use crate::model::{Field, Model};
 use crate::parser::Error;
 
-/// Extracts every `[Network]` model from `text`.
-///
-/// # Errors
-///
-/// Only what stops generation: a `[Network]` on a field with no wire type
-/// string. Source that does not compile for any other reason is the C#
-/// compiler's to report.
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     let tokens = lex(text);
     Scanner {
@@ -46,14 +13,6 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     .file()
 }
 
-/// The `namespace` a C# source file declares, if any - the first one, whether
-/// written as a block (`namespace Foo { ... }`) or file-scoped
-/// (`namespace Foo;`).
-///
-/// A generated codec's own namespace and a model's namespace need not match;
-/// this is where `cyclonec` reads the one a model's source declared, to spell
-/// a qualified reference like `Models.Player` when they differ - the C#
-/// counterpart of [`super::go::package_name`].
 pub fn namespace_name(text: &str) -> Option<String> {
     let tokens = lex(text);
     let start = tokens
@@ -76,23 +35,16 @@ pub fn namespace_name(text: &str) -> Option<String> {
     }
 }
 
-// ============================================================== the scanner
-
 struct Scanner<'a> {
     path: &'a Path,
     tokens: &'a [Token<'a>],
     at: usize,
 }
 
-/// The Cyclone attributes collected so far, waiting for the declaration they
-/// precede.
 #[derive(Default)]
 struct Pending {
-    /// `[Network]` or `[Network("TYPE")]`, and the type if it had one.
     network: Option<Option<String>>,
-    /// Every string from every `[Codec(...)]`, in order.
     codecs: Vec<String>,
-    /// The line the first Cyclone attribute was on.
     line: usize,
 }
 
@@ -108,7 +60,6 @@ impl Pending {
 }
 
 impl<'a> Scanner<'a> {
-    /// Walks a file, collecting models declared at the top level.
     fn file(&mut self) -> Result<Vec<Model>, Error> {
         let mut models = Vec::new();
         let mut pending = Pending::default();
@@ -128,9 +79,6 @@ impl<'a> Scanner<'a> {
                     pending.clear();
                 }
 
-                // A keyword that starts a different kind of declaration ends the
-                // run of attributes, so a `[Network]` on an enum is not
-                // inherited by the next class.
                 Kind::Ident(word) if is_boundary_keyword(word) => {
                     self.bump();
                     pending.clear();
@@ -150,8 +98,6 @@ impl<'a> Scanner<'a> {
         Ok(models)
     }
 
-    /// Reads a `[...]` attribute section - one or more attributes, separated by
-    /// top-level commas - adding the Cyclone ones to `pending`.
     fn attribute_section(&mut self, pending: &mut Pending) -> Result<(), Error> {
         let line = self.tokens[self.at].line;
         let open = self.at;
@@ -165,9 +111,6 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
-    /// Reads one attribute out of a section, adding it to `pending` if it is
-    /// `Network` or `Codec` (however qualified: `Network`, `NetworkAttribute`,
-    /// `Cyclone.Network`, ...).
     fn attribute(
         &self,
         tokens: &[Token<'a>],
@@ -210,7 +153,6 @@ impl<'a> Scanner<'a> {
             return Ok(());
         }
 
-        // `is_codec`.
         if pending.network.is_none() && pending.codecs.is_empty() {
             pending.line = line;
         }
@@ -224,21 +166,14 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
-    /// Reads a `class` or `struct` declaration, returning it if it is a model.
     fn type_declaration(&mut self, pending: &mut Pending) -> Result<Option<Model>, Error> {
         let Some(name) = self.peek().and_then(Token::ident) else {
             return Ok(None);
         };
         self.bump();
 
-        // A type nothing marks is somebody else's. It must not become an error
-        // just because it shares a file with a model. (Whether `[Network]` on a
-        // class carried a wire type is not checked - the same leniency the Rust
-        // scanner has for `#[network(u32)] struct Foo`.)
         let is_model = pending.network.is_some();
 
-        // Base list, generic parameters, constraints: stepped over without
-        // being read.
         let body = self.skip_to_body();
 
         if !is_model {
@@ -262,9 +197,6 @@ impl<'a> Scanner<'a> {
         Ok(Some(model))
     }
 
-    /// Reads the annotated members out of a `class` or `struct` body.
-    ///
-    /// `open` is the index of the body's `{`; the cursor is left past its `}`.
     fn members(&mut self, open: usize) -> Result<Vec<Field>, Error> {
         let close = self.matching(open, '{', '}');
         self.at = open + 1;
@@ -286,12 +218,6 @@ impl<'a> Scanner<'a> {
                 continue;
             }
 
-            // A member declaration: modifiers and a type, then the name, then
-            // either `;` / `= value ;` (a field) or `{ ... }` (a property). The
-            // C# type is never read - only where the declaration ends matters -
-            // so this walks to that point and takes the last identifier before
-            // it as the name. `(` means a method or constructor, which cannot
-            // legally carry `[Network]` on itself; skipped whole.
             match self.declaration_end(close) {
                 DeclarationEnd::Method => {
                     if !pending.is_empty() {
@@ -310,8 +236,6 @@ impl<'a> Scanner<'a> {
 
                     if !pending.is_empty() {
                         match pending.network.take() {
-                            // §18's C# counterpart - told the field is on the
-                            // wire, not told what to write for it.
                             Some(None) => {
                                 return Err(self.error(
                                     line,
@@ -324,10 +248,6 @@ impl<'a> Scanner<'a> {
                                 codecs: dedupe(std::mem::take(&mut pending.codecs)),
                                 line,
                             }),
-                            // `[Codec(...)]` with no `[Network(...)]` names a
-                            // codec for a field the generator does not know is
-                            // on the wire at all - as much a mistake as the one
-                            // above, and reported the same way.
                             None if !pending.codecs.is_empty() => {
                                 return Err(self.error(
                                     line,
@@ -341,11 +261,6 @@ impl<'a> Scanner<'a> {
 
                     pending.clear();
                 }
-                // Defensive: every other arm above is guaranteed to advance
-                // `self.at`. This one is reached on debris `declaration_end`
-                // could not name a member from - guarantee progress anyway, so
-                // a construct this scanner does not recognise is skipped rather
-                // than hung on.
                 DeclarationEnd::EndOfBody => {
                     if self.at < close {
                         self.bump();
@@ -358,8 +273,6 @@ impl<'a> Scanner<'a> {
         Ok(fields)
     }
 
-    /// Scans a declaration from the current position, stopping at the token
-    /// that reveals what kind of member it is.
     fn declaration_end(&mut self, close: usize) -> DeclarationEnd {
         let mut depth = 0i32;
         let mut last_ident = None;
@@ -403,9 +316,6 @@ impl<'a> Scanner<'a> {
         DeclarationEnd::EndOfBody
     }
 
-    /// Skips from a member's name to just past the end of its declaration: past
-    /// `;`, or past `= expression ;`, or past a property's `{ ... }` and any
-    /// trailing `;` of an expression-bodied one.
     fn skip_member_tail(&mut self, close: usize) {
         while self.at < close {
             match self.tokens[self.at].kind {
@@ -415,13 +325,6 @@ impl<'a> Scanner<'a> {
                 }
                 Kind::Punct('{') => {
                     self.skip_balanced('{', '}');
-                    // An auto-property may carry a default value initializer -
-                    // `{ get; set; } = expr;` - which is not valid C# without
-                    // the trailing `;`. If what follows the accessor block is
-                    // `=`, the declaration is not over: keep scanning for the
-                    // terminator. A nested `{ ... }` inside that expression
-                    // (a collection initializer, say) is skipped the same way,
-                    // by looping back through this same arm.
                     if !self
                         .tokens
                         .get(self.at)
@@ -435,8 +338,6 @@ impl<'a> Scanner<'a> {
             }
         }
     }
-
-    // ------------------------------------------------------------- movement
 
     fn peek(&self) -> Option<&'a Token<'a>> {
         self.tokens.get(self.at)
@@ -454,11 +355,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Steps over a type's base list, generic parameters and constraints.
-    ///
-    /// Returns the index of its body's `{`, or `None` for a rare `;`-terminated
-    /// declaration (a partial method-like forward form C# does not actually use
-    /// for types, kept only so a malformed file cannot hang the scanner).
     fn skip_to_body(&mut self) -> Option<usize> {
         let mut depth = 0i32;
 
@@ -483,7 +379,6 @@ impl<'a> Scanner<'a> {
         self.at = self.matching(self.at, open, close) + 1;
     }
 
-    /// The index of the bracket closing the one at `start`.
     fn matching(&self, start: usize, open: char, close: char) -> usize {
         let mut depth = 0i32;
 
@@ -503,21 +398,12 @@ impl<'a> Scanner<'a> {
     }
 }
 
-/// What a member declaration turned out to be, once the scanner reached the
-/// token that reveals it.
 enum DeclarationEnd {
-    /// A method or constructor - `(` at depth 0. `[Network]` cannot legally
-    /// attach to one, so a pending Cyclone attribute here is an error.
     Method,
-    /// A field or property, named by the identifier at `name_index`.
     Member { name_index: usize },
-    /// The body ended before a member could be identified - a trailing
-    /// `[Codec]` with nothing after it, or similar debris.
     EndOfBody,
 }
 
-/// The string content of a token sequence that is exactly one string literal,
-/// ignoring surrounding whitespace-equivalent tokens there are none of.
 fn string_literal(tokens: &[Token<'_>]) -> Option<String> {
     match tokens {
         [Token {
@@ -528,7 +414,6 @@ fn string_literal(tokens: &[Token<'_>]) -> Option<String> {
     }
 }
 
-/// Splits a token slice on commas that are not inside brackets.
 fn split_top_level<'a, 'b>(tokens: &'b [Token<'a>]) -> Vec<&'b [Token<'a>]> {
     let mut parts = Vec::new();
     let mut depth = 0i32;
@@ -553,10 +438,6 @@ fn split_top_level<'a, 'b>(tokens: &'b [Token<'a>]) -> Vec<&'b [Token<'a>]> {
     parts
 }
 
-/// Drops repeats, keeping the order the source wrote. See the identical helper
-/// in [`crate::parser::rust`] - a codec named twice would produce the same
-/// generated type twice, a guaranteed compile error rather than a schema
-/// question, so it is removed here rather than reported.
 fn dedupe(mut names: Vec<String>) -> Vec<String> {
     let mut seen = Vec::with_capacity(names.len());
     names.retain(|name| {
@@ -569,13 +450,6 @@ fn dedupe(mut names: Vec<String>) -> Vec<String> {
     names
 }
 
-/// Keywords that start a declaration `[Network]`/`[Codec]` cannot attach a
-/// model to, and so end a run of pending attributes.
-///
-/// Modifiers (`public`, `static`, `partial`, ...) are deliberately absent: they
-/// sit between the attributes and the `class`/`struct` keyword they belong to,
-/// and clearing on one of them would drop the very attributes this scanner is
-/// looking for.
 fn is_boundary_keyword(word: &str) -> bool {
     matches!(
         word,
@@ -583,9 +457,6 @@ fn is_boundary_keyword(word: &str) -> bool {
     )
 }
 
-// ================================================================= the lexer
-
-/// One token, borrowed from the source.
 #[derive(Debug, Clone, Copy)]
 struct Token<'a> {
     kind: Kind<'a>,
@@ -595,11 +466,8 @@ struct Token<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind<'a> {
     Ident(&'a str),
-    /// A string literal's contents - decoded enough to read a wire type or
-    /// codec name, which is the only thing a string ever holds here.
     Str(&'a str),
     Punct(char),
-    /// A numeric or character literal. Never meaningful here, only skipped.
     Other,
 }
 
@@ -612,11 +480,6 @@ impl<'a> Token<'a> {
     }
 }
 
-/// Splits C# source into tokens.
-///
-/// Comments, whitespace and preprocessor directives are dropped: none of them
-/// can carry a Cyclone annotation, and all of them can carry a `[` or `{` that
-/// would otherwise be counted.
 fn lex(text: &str) -> Vec<Token<'_>> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
@@ -655,9 +518,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // A preprocessor directive runs to end of line. `#if` blocks are not
-        // evaluated - a model behind one is read either way, which is safer
-        // than guessing which branch a build takes.
         if byte == b'#' {
             while at < bytes.len() && bytes[at] != b'\n' {
                 at += 1;
@@ -735,14 +595,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
     tokens
 }
 
-/// Matches a string literal in any of C#'s spellings - `"…"`, `@"…"`, `$"…"`,
-/// `$@"…"`/`@$"…"`, and the raw `"""…"""` form.
-///
-/// Returns the decoded contents, the index just past the literal, and how many
-/// lines it spanned. Escapes are resolved only for the ordinary and
-/// interpolated forms; a verbatim or raw string's `""` self-escape is resolved
-/// too, since a Cyclone name is never written with one but a mishandled escape
-/// must not shift token boundaries.
 fn string_token(text: &str, at: usize) -> Option<(&str, usize, usize)> {
     let bytes = text.as_bytes();
     let mut cursor = at;
@@ -759,7 +611,6 @@ fn string_token(text: &str, at: usize) -> Option<(&str, usize, usize)> {
         return None;
     }
 
-    // `"""…"""`, closed by at least as many quotes as opened it.
     if bytes.get(cursor + 1) == Some(&b'"') && bytes.get(cursor + 2) == Some(&b'"') {
         let mut fence = 0;
         while bytes.get(cursor + fence) == Some(&b'"') {

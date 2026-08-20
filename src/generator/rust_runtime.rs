@@ -1,26 +1,3 @@
-//! The Cyclone runtime, carried verbatim into `runtime.rs`.
-//!
-//! # Why this is a constant
-//!
-//! The generator is forbidden from working out byte layout, endianness or
-//! string encoding, and it does not: the text below is fixed, written once
-//! against RFC-0002, and copied out unchanged. Nothing here is computed per
-//! model, per field, or per run - the generator cannot derive a wire format
-//! even in principle, because it only knows how to `push_str` this.
-//!
-//! Everything is spelled with fully-qualified paths (`::core::…`, `::std::…`)
-//! so the block introduces no `use` of its own and cannot collide with the
-//! imports at the site it is included into.
-//!
-//! # What changed from `cyclonec_old`
-//!
-//! One method: [`Reader::field_absent`]. The old runtime gave a generated
-//! decoder no way to tell *this field never arrived* from *this field arrived
-//! truncated* - every read simply returned `UnexpectedEof` - so the decoder
-//! could not implement RFC-0002 §9.1 at all. See `generator::rust` for what the
-//! generated decoder does with it.
-
-/// The runtime block, emitted once, into its own file.
 pub const RUNTIME: &str = r####"
 // ==========================================================================
 // Cyclone runtime - RFC-0002, carried verbatim.

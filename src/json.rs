@@ -1,35 +1,16 @@
-//! A JSON value, written and read by hand.
-//!
-//! `.cyclone/schema.json` is a **project contract**: it gets committed, diffed
-//! in review, and compared against a target branch in CI. That makes two
-//! properties matter more than convenience.
-//!
-//! *Key order is authored, not sorted or hashed.* [`Json::Object`] keeps its
-//! entries in a `Vec`, so the same schema always serialises to byte-identical
-//! text and a diff shows what actually changed.
-//!
-//! *A number is stored as the text that was written.* Round-tripping a `u64`
-//! through `f64` would quietly lose the low bits of a fingerprint, so numbers
-//! never become floats here at all.
-
 use std::fmt::Write as _;
 
-/// A JSON value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Json {
     Null,
     Bool(bool),
-    /// The literal text of a number, exactly as written or parsed.
     Number(String),
     String(String),
     Array(Vec<Json>),
-    /// Entries in authored order; duplicate keys are possible but never
-    /// written by this crate.
     Object(Vec<(String, Json)>),
 }
 
 impl Json {
-    /// An object from its entries, in order.
     pub fn object(entries: Vec<(&str, Json)>) -> Json {
         Json::Object(
             entries
@@ -39,17 +20,14 @@ impl Json {
         )
     }
 
-    /// A string value.
     pub fn string(text: impl Into<String>) -> Json {
         Json::String(text.into())
     }
 
-    /// An integer value.
     pub fn number(value: impl std::fmt::Display) -> Json {
         Json::Number(value.to_string())
     }
 
-    /// The value of `key`, for an object.
     pub fn get(&self, key: &str) -> Option<&Json> {
         match self {
             Json::Object(entries) => entries
@@ -88,7 +66,6 @@ impl Json {
         }
     }
 
-    /// Renders the value as indented JSON, ending in a newline.
     pub fn to_pretty(&self) -> String {
         let mut out = String::with_capacity(4096);
         write_value(&mut out, self, 0);
@@ -161,13 +138,6 @@ fn write_string(out: &mut String, text: &str) {
     out.push('"');
 }
 
-// ================================================================== the parser
-
-/// Parses JSON text.
-///
-/// # Errors
-///
-/// A message naming what was expected and roughly where.
 pub fn parse(text: &str) -> Result<Json, String> {
     let bytes = text.as_bytes();
     let mut at = 0;
@@ -277,8 +247,6 @@ fn parse_string(text: &str, bytes: &[u8], at: &mut usize) -> Result<String, Stri
                     b't' => out.push('\t'),
                     b'u' => {
                         let code = unicode_escape(text, at)?;
-                        // A surrogate pair is two escapes; the low half only
-                        // means anything joined to the high one.
                         let character = if (0xD800..0xDC00).contains(&code) {
                             if bytes.get(*at) != Some(&b'\\') || bytes.get(*at + 1) != Some(&b'u') {
                                 return Err("lone high surrogate".to_owned());
@@ -295,7 +263,6 @@ fn parse_string(text: &str, bytes: &[u8], at: &mut usize) -> Result<String, Stri
                 }
             }
             Some(_) => {
-                // Copy one whole UTF-8 character, not one byte.
                 let rest = &text[*at..];
                 let character = rest.chars().next().ok_or("invalid utf-8")?;
                 out.push(character);
@@ -374,8 +341,6 @@ mod tests {
         assert_eq!(parse(&text).expect("parse"), value);
     }
 
-    /// A `u64` fingerprint survives the round trip bit for bit - the reason
-    /// numbers are kept as text.
     #[test]
     fn keeps_a_u64_exactly() {
         let text = Json::number(u64::MAX).to_pretty();

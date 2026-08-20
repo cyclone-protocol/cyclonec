@@ -1,24 +1,8 @@
-//! Rust source → [`Model`]s.
-//!
-//! Reads `#[network]` / `#[network(TYPE)]` / `#[codec(...)]`. See
-//! [`crate::parser`] for what this scanner is and is not.
-//!
-//! Ported from `cyclonec_old` with its behaviour intact - the same tokens, the
-//! same struct walk, the same one error. What is new is only that each model
-//! and each field now carries the file and line it was read from, which the IR
-//! needs for `schema.json`, the build graph, and diagnostics that point at
-//! source rather than at a schema.
-
 use std::path::Path;
 
 use crate::model::{Field, Model};
 use crate::parser::Error;
 
-/// Extracts every `#[network]` model from `text`.
-///
-/// # Errors
-///
-/// Only what stops generation: a `#[network]` field with no network type.
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     let tokens = lex(text);
     Scanner {
@@ -29,22 +13,16 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     .file()
 }
 
-// ============================================================== the scanner
-
 struct Scanner<'a> {
     path: &'a Path,
     tokens: &'a [Token<'a>],
     at: usize,
 }
 
-/// The Cyclone attributes collected so far, waiting for the item they precede.
 #[derive(Default)]
 struct Pending {
-    /// `#[network]` or `#[network(TYPE)]`, and the type if it had one.
     network: Option<Option<String>>,
-    /// Every identifier from every `#[codec(...)]`, in order.
     codecs: Vec<String>,
-    /// The line the first Cyclone attribute was on.
     line: usize,
 }
 
@@ -56,7 +34,6 @@ impl Pending {
 }
 
 impl<'a> Scanner<'a> {
-    /// Walks a file, collecting models.
     fn file(&mut self) -> Result<Vec<Model>, Error> {
         let mut models = Vec::new();
         let mut pending = Pending::default();
@@ -76,8 +53,6 @@ impl<'a> Scanner<'a> {
                     pending.clear();
                 }
 
-                // Any other item keyword ends the run of attributes, so a
-                // `#[network]` on an enum is not inherited by the next struct.
                 Kind::Ident(word) if is_item_keyword(word) => {
                     self.bump();
                     pending.clear();
@@ -92,13 +67,10 @@ impl<'a> Scanner<'a> {
         Ok(models)
     }
 
-    /// Reads one attribute, adding it to `pending` if it is Cyclone's.
     fn attribute(&mut self, pending: &mut Pending) -> Result<(), Error> {
         let line = self.tokens[self.at].line;
         self.bump();
 
-        // `#!` is an inner attribute and never one of ours; `#` before anything
-        // but `[` is not an attribute at all.
         if self
             .peek()
             .is_some_and(|token| token.kind == Kind::Punct('!'))
@@ -121,7 +93,6 @@ impl<'a> Scanner<'a> {
             return Ok(());
         };
 
-        // The arguments of `name(...)`, if it has any.
         let arguments = match body.get(1) {
             Some(token) if token.kind == Kind::Punct('(') => {
                 Some(&body[2..body.len().saturating_sub(1)])
@@ -154,7 +125,6 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
-    /// Reads a struct declaration, returning it if it is a model.
     fn strukt(&mut self, pending: &mut Pending) -> Result<Option<Model>, Error> {
         let Some(name) = self.peek().and_then(Token::ident) else {
             return Ok(None);
@@ -166,17 +136,10 @@ impl<'a> Scanner<'a> {
         };
         self.bump();
 
-        // A struct nothing marks is somebody else's type. It must not become an
-        // error just because it shares a file with a model.
         let is_model = pending.network.is_some();
 
-        // Generics, a where-clause, a tuple body: stepped over without being
-        // read. A `;` before any `{` means the struct has no named fields.
         let body = self.skip_to_body();
 
-        // An unmarked struct is stepped over whole. Its fields are not read, so
-        // an annotation inside one cannot leak onto the next struct, and cannot
-        // raise an error for a type the generator was never asked about.
         if !is_model {
             if let Some(open) = body {
                 self.at = self.matching(open, '{', '}') + 1;
@@ -198,9 +161,6 @@ impl<'a> Scanner<'a> {
         Ok(Some(model))
     }
 
-    /// Reads the annotated fields out of a struct body.
-    ///
-    /// `open` is the index of the body's `{`; the cursor is left past its `}`.
     fn fields(&mut self, open: usize) -> Result<Vec<Field>, Error> {
         let close = self.matching(open, '{', '}');
         self.at = open + 1;
@@ -216,9 +176,6 @@ impl<'a> Scanner<'a> {
                 continue;
             }
 
-            // A field is `name : type`, after any modifiers. Anything else in a
-            // struct body is skipped to the next comma. `name ::` is a path in
-            // somebody's default expression, not a field.
             let name = token.ident();
             let is_field = name.is_some()
                 && self
@@ -239,15 +196,11 @@ impl<'a> Scanner<'a> {
             }
 
             let name = name.expect("checked above");
-            // The attribute's line, not the field's: an error about
-            // `#[network]` should point at the `#[network]` the user wrote.
             let line = pending.line;
             self.at += 2;
             self.skip_field_type(close);
 
             match pending.network.take() {
-                // The one syntax error worth reporting: the generator was told
-                // this field is on the wire, but not what to write for it.
                 Some(None) => {
                     return Err(self.error(line, "#[network] field requires a network type"));
                 }
@@ -257,7 +210,6 @@ impl<'a> Scanner<'a> {
                     codecs: dedupe(std::mem::take(&mut pending.codecs)),
                     line,
                 }),
-                // No `#[network(...)]`: not a network field, and not an error.
                 None => {}
             }
 
@@ -267,8 +219,6 @@ impl<'a> Scanner<'a> {
         self.at = close + 1;
         Ok(fields)
     }
-
-    // ------------------------------------------------------------- movement
 
     fn peek(&self) -> Option<&'a Token<'a>> {
         self.tokens.get(self.at)
@@ -286,10 +236,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Steps over a struct's generics and where-clause.
-    ///
-    /// Returns the index of its body's `{`, or `None` for a struct that ends in
-    /// `;` and so has no named fields.
     fn skip_to_body(&mut self) -> Option<usize> {
         let mut depth = 0i32;
 
@@ -310,10 +256,6 @@ impl<'a> Scanner<'a> {
         None
     }
 
-    /// Steps over a field's Rust type without reading it.
-    ///
-    /// The type is never inspected - `#[network(TYPE)]` already said what goes
-    /// on the wire - so this only has to find where the field ends.
     fn skip_field_type(&mut self, close: usize) {
         let mut depth = 0i32;
 
@@ -328,7 +270,6 @@ impl<'a> Scanner<'a> {
                     depth += 1;
                 }
                 Kind::Punct('>') | Kind::Punct(')') | Kind::Punct(']') | Kind::Punct('}') => {
-                    // The `>` of `->` closes nothing.
                     let is_arrow = kind == Kind::Punct('>')
                         && self.at > 0
                         && self.tokens[self.at - 1].kind == Kind::Punct('-');
@@ -342,7 +283,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// The index of the bracket closing the one at `start`.
     fn matching(&self, start: usize, open: char, close: char) -> usize {
         let mut depth = 0i32;
 
@@ -362,10 +302,6 @@ impl<'a> Scanner<'a> {
     }
 }
 
-/// Joins an attribute's argument tokens back into the text the user wrote.
-///
-/// `Array < u32 >` becomes `Array<u32>`. The result is handed to the IR as a
-/// name to resolve, not as something this module analyses.
 fn render(tokens: &[Token<'_>]) -> String {
     let mut out = String::new();
     for token in tokens {
@@ -378,11 +314,6 @@ fn render(tokens: &[Token<'_>]) -> String {
     out
 }
 
-/// Drops repeats, keeping the order the source wrote.
-///
-/// A codec named twice would otherwise produce the same generated type twice,
-/// which is a guaranteed compile error rather than a schema question - so it is
-/// removed here instead of reported.
 fn dedupe(mut names: Vec<String>) -> Vec<String> {
     let mut seen = Vec::with_capacity(names.len());
     names.retain(|name| {
@@ -395,7 +326,6 @@ fn dedupe(mut names: Vec<String>) -> Vec<String> {
     names
 }
 
-/// Keywords that start an item, and so end a run of attributes.
 fn is_item_keyword(word: &str) -> bool {
     matches!(
         word,
@@ -413,9 +343,6 @@ fn is_item_keyword(word: &str) -> bool {
     )
 }
 
-// =================================================================== the lexer
-
-/// One token, borrowed from the source.
 #[derive(Debug, Clone, Copy)]
 struct Token<'a> {
     kind: Kind<'a>,
@@ -426,7 +353,6 @@ struct Token<'a> {
 enum Kind<'a> {
     Ident(&'a str),
     Punct(char),
-    /// A literal. Never meaningful here, only stepped over.
     Other,
 }
 
@@ -439,11 +365,6 @@ impl<'a> Token<'a> {
     }
 }
 
-/// Splits source into tokens, borrowing every identifier rather than copying it.
-///
-/// Comments and literals are dropped, which is the whole point: a `#[` inside a
-/// string and a `struct` inside a comment are not source, and a scanner that
-/// could not tell would be a search-and-replace with extra steps.
 fn lex(text: &str) -> Vec<Token<'_>> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
@@ -463,7 +384,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // `//` to end of line.
         if byte == b'/' && bytes.get(at + 1) == Some(&b'/') {
             while at < bytes.len() && bytes[at] != b'\n' {
                 at += 1;
@@ -471,7 +391,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // `/* */`, which nests in Rust.
         if byte == b'/' && bytes.get(at + 1) == Some(&b'*') {
             let mut depth = 0;
             while at < bytes.len() {
@@ -496,7 +415,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // `r"…"`, `r#"…"#`, `br#"…"#` - the hash count closes it.
         if let Some(next) = raw_string(bytes, at) {
             line += count_newlines(&bytes[at..next]);
             at = next;
@@ -507,7 +425,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // `"…"`, and `b"…"`.
         let quote = at + usize::from(byte == b'b' && bytes.get(at + 1) == Some(&b'"'));
         if bytes.get(quote) == Some(&b'"') {
             let start = at;
@@ -524,7 +441,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // `'c'` is a literal; `'a` is a lifetime, and its `'` is punctuation.
         if byte == b'\'' {
             if let Some(next) = char_literal(bytes, at) {
                 at = next;
@@ -547,7 +463,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             while at < bytes.len() && is_ident_continue(bytes[at]) {
                 at += 1;
             }
-            // `r#type` is an identifier whose `r#` is not part of the name.
             let name = &text[start..at];
             let name = name.strip_prefix("r#").unwrap_or(name);
             tokens.push(Token {
@@ -578,7 +493,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
     tokens
 }
 
-/// Matches a raw string at `at`, returning the index just past it.
 fn raw_string(bytes: &[u8], at: usize) -> Option<usize> {
     let mut cursor = at;
     if bytes.get(cursor) == Some(&b'b') {
@@ -602,7 +516,6 @@ fn raw_string(bytes: &[u8], at: usize) -> Option<usize> {
     }
     cursor += 1;
 
-    // The literal ends at the first `"` followed by as many `#` as opened it.
     while cursor < bytes.len() {
         if bytes[cursor] == b'"' && bytes[cursor + 1..].iter().take(hashes).all(|b| *b == b'#') {
             return Some((cursor + 1 + hashes).min(bytes.len()));
@@ -613,7 +526,6 @@ fn raw_string(bytes: &[u8], at: usize) -> Option<usize> {
     Some(bytes.len())
 }
 
-/// Matches a character literal at `at`, returning the index just past it.
 fn char_literal(bytes: &[u8], at: usize) -> Option<usize> {
     let after_escape = match bytes.get(at + 1) {
         Some(b'\\') => {
@@ -627,8 +539,6 @@ fn char_literal(bytes: &[u8], at: usize) -> Option<usize> {
         None => return None,
     };
 
-    // A lifetime looks the same up to here; only the closing quote separates
-    // them.
     (bytes.get(after_escape) == Some(&b'\'')).then_some(after_escape + 1)
 }
 

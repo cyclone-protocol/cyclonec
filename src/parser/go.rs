@@ -1,42 +1,8 @@
-//! Go source → [`Model`]s.
-//!
-//! Go has no attributes, so Cyclone metadata lives in the two places Go itself
-//! offers for out-of-band information: a `//cyclone:model` comment directive
-//! names a model and its codecs, and `` `cyclone:"..." codec:"..."` `` struct
-//! tags name a field's wire type and codec membership. See [`crate::parser`]
-//! for what this scanner is and is not.
-//!
-//! ```text
-//! //cyclone:model codec=edge,unity     this struct is a model, generate these
-//! type DeviceState struct {
-//!     ID uint32 `cyclone:"u32" codec:"edge,unity"`   this field's wire type and codecs
-//! }
-//! ```
-//!
-//! # Two errors, not zero
-//!
-//! Every other scanner in this project reports exactly one error - a network
-//! field with no wire type. Go's directive comment adds a second failure mode
-//! that has no Rust counterpart: `//cyclone:model` is text on a line by
-//! itself, with nothing in the language forcing it to sit next to the type it
-//! names. A directive not immediately followed by a `type ... struct` - a
-//! typo'd struct, a `func`, end of file - would otherwise mark nothing and
-//! vanish silently, which is exactly the kind of malformed-directive silence
-//! the brief forbids passing over.
-
 use std::path::Path;
 
 use crate::model::{Field, Model};
 use crate::parser::Error;
 
-/// Extracts every `//cyclone:model` struct from `text`.
-///
-/// # Errors
-///
-/// A `//cyclone:model` directive not immediately followed by a `type ...
-/// struct` declaration; a malformed directive argument; a field tagged
-/// `codec:"..."` with no `cyclone:"..."` wire type. Source that does not
-/// compile for any other reason is the Go compiler's to report.
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     let tokens = lex(text);
     Scanner {
@@ -47,13 +13,6 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     .file()
 }
 
-/// The `package` clause a Go source file declares, if any.
-///
-/// Go compiles by directory, not by file: every `.go` file in the directory
-/// generated output lands in must declare the same package (including the
-/// model types the generated codecs name), or nothing in it will resolve.
-/// `cyclonec` never resolves that itself; this is where it reads the one name
-/// it needs, to spell a qualified reference like `models.Player`.
 pub fn package_name(text: &str) -> Option<String> {
     let tokens = lex(text);
     tokens
@@ -64,8 +23,6 @@ pub fn package_name(text: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-// ============================================================== the scanner
-
 struct Scanner<'a> {
     path: &'a Path,
     tokens: &'a [Token<'a>],
@@ -73,7 +30,6 @@ struct Scanner<'a> {
 }
 
 impl<'a> Scanner<'a> {
-    /// Walks a file, collecting models declared at the top level.
     fn file(&mut self) -> Result<Vec<Model>, Error> {
         let mut models = Vec::new();
 
@@ -95,7 +51,6 @@ impl<'a> Scanner<'a> {
         Ok(models)
     }
 
-    /// Reads the `type Name struct { ... }` a directive must be followed by.
     fn model_after_directive(&mut self, line: usize, codecs: Vec<String>) -> Result<Model, Error> {
         if !self
             .peek()
@@ -149,9 +104,6 @@ impl<'a> Scanner<'a> {
         })
     }
 
-    /// Reads the tagged fields out of a struct body.
-    ///
-    /// `open` is the index of the body's `{`; the cursor is left past its `}`.
     fn fields(&mut self, open: usize) -> Result<Vec<Field>, Error> {
         let close = self.matching(open, '{', '}');
         self.at = open + 1;
@@ -166,11 +118,6 @@ impl<'a> Scanner<'a> {
                 continue;
             };
 
-            // A field is `Name Type` (or `Name Type \`tag\``), always the first
-            // thing on its line inside the body. A comma-separated name list
-            // (`A, B int`) is deliberately not supported, so only the leading
-            // identifier is read as a name, and everything else up to the end
-            // of the line is the type and, optionally, the tag.
             let line = token.line;
             self.bump();
 
@@ -183,8 +130,6 @@ impl<'a> Scanner<'a> {
             }
 
             let Some(tag) = tag else {
-                // No struct tag at all: not a network field, and not an error -
-                // the same treatment an unannotated field gets in Rust.
                 continue;
             };
 
@@ -205,9 +150,6 @@ impl<'a> Scanner<'a> {
                         self.error(line, format!("field '{name}' is missing cyclone wire type"))
                     );
                 }
-                // Neither `cyclone` nor `codec` present: an ordinary Go struct
-                // tag (`json:"..."`, say) on a field Cyclone was never told
-                // about.
                 _ => {}
             }
         }
@@ -215,8 +157,6 @@ impl<'a> Scanner<'a> {
         self.at = close + 1;
         Ok(fields)
     }
-
-    // ------------------------------------------------------------- movement
 
     fn peek(&self) -> Option<&'a Token<'a>> {
         self.tokens.get(self.at)
@@ -234,7 +174,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// The index of the bracket closing the one at `start`.
     fn matching(&self, start: usize, open: char, close: char) -> usize {
         let mut depth = 0i32;
 
@@ -254,9 +193,6 @@ impl<'a> Scanner<'a> {
     }
 }
 
-/// Parses the text after `//cyclone:model`: either nothing (a model with no
-/// codecs - valid, and generates nothing, the same as bare `#[network]` in
-/// Rust), or `codec=name,name,...`.
 fn parse_directive_arguments(text: &str) -> Result<Vec<String>, String> {
     let text = text.trim();
     if text.is_empty() {
@@ -273,9 +209,6 @@ fn parse_directive_arguments(text: &str) -> Result<Vec<String>, String> {
     Ok(split_codec_list(list.to_owned()))
 }
 
-/// Splits and trims a comma-separated codec list, dropping empties (so
-/// `codec=` and `codec=,` both mean "no codecs" rather than one blank name)
-/// and repeats, keeping the order written.
 fn split_codec_list(list: String) -> Vec<String> {
     let mut seen = Vec::new();
     let mut out = Vec::new();
@@ -295,19 +228,11 @@ fn split_codec_list(list: String) -> Vec<String> {
     out
 }
 
-/// The `cyclone` and `codec` values out of a struct tag, if present.
 struct Tag {
     cyclone: Option<String>,
     codec: Option<String>,
 }
 
-/// Parses a Go struct tag: `` key:"value" key:"value" `` (the format
-/// `reflect.StructTag` reads), picking out `cyclone` and `codec`.
-///
-/// Only enough of the grammar to read those two keys correctly, including
-/// through backslash escapes in the values, so a tag with a `"` or `\` in some
-/// other key's value does not throw off where `cyclone`'s or `codec`'s value
-/// ends. Any other key (`json`, `yaml`, ...) is skipped.
 fn parse_tag(text: &str) -> Tag {
     let mut tag = Tag {
         cyclone: None,
@@ -331,8 +256,6 @@ fn parse_tag(text: &str) -> Tag {
         let key = &text[key_start..at];
 
         if at >= bytes.len() || bytes[at] != b':' || bytes.get(at + 1) != Some(&b'"') {
-            // Not a well-formed `key:"value"` from here on; stop rather than
-            // guess. Whatever named `cyclone`/`codec` earlier is still used.
             break;
         }
         at += 2;
@@ -355,9 +278,6 @@ fn parse_tag(text: &str) -> Tag {
     tag
 }
 
-/// Resolves `\"` and `\\` inside a struct tag value. Cyclone wire types and
-/// codec names never legitimately contain either, but a tag copied from
-/// elsewhere might, and the text must still be read back correctly.
 fn unescape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars();
@@ -375,9 +295,6 @@ fn unescape(text: &str) -> String {
     out
 }
 
-// =================================================================== the lexer
-
-/// One token, borrowed from the source.
 #[derive(Debug, Clone, Copy)]
 struct Token<'a> {
     kind: Kind<'a>,
@@ -387,12 +304,9 @@ struct Token<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind<'a> {
     Ident(&'a str),
-    /// A quoted or backtick-quoted string's contents.
     Str(&'a str),
-    /// A `//cyclone:model` directive, holding the text after that prefix.
     Directive(&'a str),
     Punct(char),
-    /// A numeric or rune literal. Never meaningful here, only skipped.
     Other,
 }
 
@@ -405,15 +319,8 @@ impl<'a> Token<'a> {
     }
 }
 
-/// The exact prefix a directive comment starts with.
 const DIRECTIVE_PREFIX: &str = "cyclone:model";
 
-/// Splits Go source into tokens.
-///
-/// Every comment is dropped except one shape: a line comment `//` immediately
-/// (no space) followed by `cyclone:model` becomes a [`Kind::Directive`] token
-/// instead of being discarded, because unlike every other comment in every
-/// language this project reads, that one *is* source.
 fn lex(text: &str) -> Vec<Token<'_>> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
@@ -440,10 +347,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             }
             let rest = &text[content_start..at];
             if let Some(arguments) = rest.strip_prefix(DIRECTIVE_PREFIX) {
-                // A word boundary after the prefix: `//cyclone:model` and
-                // `//cyclone:model codec=edge` are the directive;
-                // `//cyclone:modeling` is an ordinary comment that happens to
-                // start the same way.
                 if arguments.is_empty() || arguments.starts_with(char::is_whitespace) {
                     tokens.push(Token {
                         kind: Kind::Directive(arguments),
@@ -466,9 +369,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // Backtick raw strings: struct tags, and any other raw string literal.
-        // No escapes at all in Go - the only way to end one is another
-        // backtick.
         if byte == b'`' {
             let start = at + 1;
             at += 1;
@@ -486,7 +386,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // Interpreted strings: `"..."`, with backslash escapes.
         if byte == b'"' {
             let start = at + 1;
             at += 1;
@@ -501,7 +400,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // Rune literals: `'x'`, `'\n'`, `'\''`.
         if byte == b'\'' {
             at += 1;
             while at < bytes.len() && bytes[at] != b'\'' {

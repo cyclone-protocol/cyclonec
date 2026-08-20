@@ -1,48 +1,11 @@
-//! `handshake.hpp` - the fingerprints, generated.
-//!
-//! The C++ counterpart of [`super::handshake`], [`super::go_handshake`] and
-//! [`super::csharp_handshake`] - same contract, same safety property:
-//!
-//! ```text
-//! peer schema fingerprint == ours               -> Current    accept
-//! a message both ends know, fingerprints differ -> Reject     disconnect
-//! otherwise                                      -> Outdated   accept
-//! ```
-//!
-//! Nothing here is hand-written or hand-updated, for the same reason as every
-//! other backend's handshake file: a constant a human keeps in step with a
-//! schema is a constant one commit away from being wrong.
-//!
-//! # No exceptions, here either
-//!
-//! [`cyclone_message`] returns a `const CycloneMessage*`, `nullptr` for "no
-//! such id" - the C++ counterpart of Go's `(CycloneMessage, bool)` and Rust's
-//! `Option<&CycloneMessage>`. The optional per-frame envelope follows the
-//! same discipline [`super::cpp`] uses throughout: a function that can fail
-//! returns a `bool` (or a [`super::cpp_runtime`]'s `DecodeError`) and reports
-//! through an output parameter, never by throwing.
-
 use std::collections::BTreeMap;
 
 use crate::ir::Schema;
 use crate::model::screaming_snake_case;
 use crate::schema::hex64;
 
-/// The file name, relative to the output directory.
 pub const FILE_NAME: &str = "handshake.hpp";
 
-/// Renders `handshake.hpp`.
-///
-/// `validate_message_fingerprint` adds the optional per-frame envelope
-/// helpers - see the brief's §11. It is off by default, because a
-/// fingerprint in every frame is 12 bytes of overhead per message on a wire
-/// format whose entire premise is that there is no metadata on it.
-///
-/// # Errors
-///
-/// Two constants that would be spelled the same - a model named `PlayerEdge`
-/// beside a `Player` with an `edge` codec. Rare, mechanical, and far better
-/// reported here than as a redefinition error in the user's build.
 pub fn handshake_file(
     schema: &Schema,
     namespace: &str,
@@ -62,8 +25,6 @@ pub fn handshake_file(
     .render();
     out.push_str("#pragma once\n\n");
     out.push_str("#include <cstddef>\n#include <cstdint>\n#include <string>\n#include <vector>\n");
-    // The handshake itself needs nothing from the runtime; the optional frame
-    // envelope needs `DecodeError`, `Reader` and `Writer`.
     if validate_message_fingerprint {
         out.push_str("\n#include \"runtime.hpp\"\n");
     }
@@ -114,8 +75,6 @@ pub fn handshake_file(
 
     out.push_str(TYPES);
 
-    // Sorted by id, so a peer's table and ours can be compared without either
-    // side sorting first.
     let mut messages: Vec<_> = schema.messages().collect();
     messages.sort_by_key(|message| message.id);
 
@@ -147,7 +106,6 @@ pub fn handshake_file(
     Ok(out)
 }
 
-/// `Player` + `edge` → `PLAYER_EDGE`.
 fn message_constant(model: &str, codec: &str) -> String {
     format!(
         "{}_{}",
@@ -156,7 +114,6 @@ fn message_constant(model: &str, codec: &str) -> String {
     )
 }
 
-/// Two constants may not be spelled the same.
 fn check_constant_names(schema: &Schema) -> Result<(), String> {
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
 
@@ -180,7 +137,6 @@ fn check_constant_names(schema: &Schema) -> Result<(), String> {
     Ok(())
 }
 
-/// The message descriptor, identical in every generated `handshake.hpp`.
 const TYPES: &str = "\
 /// One message: its id, its name, and the fingerprint of its wire contract.
 struct CycloneMessage {
@@ -194,7 +150,6 @@ struct CycloneMessage {
 
 ";
 
-/// The handshake itself, identical in every generated `handshake.hpp`.
 const HANDSHAKE: &str = r####"
 /// What a peer's fingerprints mean for this one.
 enum class CycloneHandshake {
@@ -259,7 +214,6 @@ inline CycloneHandshake cyclone_handshake(
 }
 "####;
 
-/// The optional per-frame envelope, when `validate_message_fingerprint` is on.
 const ENVELOPE: &str = r####"
 // ==========================================================================
 // Per-frame validation - validate_message_fingerprint = true.
@@ -360,7 +314,6 @@ inline bool cyclone_read_envelope(Reader& reader, const CycloneMessage*& out,
 }
 "####;
 
-/// What stands in for the envelope when it is off.
 const ENVELOPE_OFF: &str = "\
 // Per-frame message validation is off, so no envelope is generated and no
 // frame carries one. Turn it on in cyclone.toml:

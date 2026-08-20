@@ -1,33 +1,9 @@
-//! `handshake.go` - the fingerprints, generated.
-//!
-//! The Go counterpart of [`super::handshake`] - same contract, same safety
-//! property:
-//!
-//! ```text
-//! peer schema fingerprint == ours               -> Current    accept
-//! a message both ends know, fingerprints differ -> Reject     disconnect
-//! otherwise                                      -> Outdated   accept
-//! ```
-//!
-//! Go has no enum type, so [`CycloneHandshake`] below is generated as a
-//! defined `int` type with three named constants - the idiomatic Go shape for
-//! a closed set of values, and the same shape `iota`-based enums in the Go
-//! standard library use.
-
 use std::collections::BTreeMap;
 
 use crate::ir::Schema;
 
-/// The file name, relative to the output directory.
 pub const FILE_NAME: &str = "handshake.go";
 
-/// Renders `handshake.go`.
-///
-/// # Errors
-///
-/// Two constants that would be spelled the same - a model named `PlayerEdge`
-/// beside a `Player` with an `edge` codec. Rare, mechanical, and far better
-/// reported here than as a redeclaration error in the user's build.
 pub fn handshake_file(
     schema: &Schema,
     package: &str,
@@ -47,8 +23,6 @@ pub fn handshake_file(
     .render();
     out.push_str(&format!("package {package}\n\n"));
 
-    // The handshake itself needs nothing beyond its own package; the optional
-    // frame envelope reports errors through `fmt.Errorf`.
     if validate_message_fingerprint {
         out.push_str("import \"fmt\"\n\n");
     }
@@ -98,8 +72,6 @@ pub fn handshake_file(
 
     out.push_str(TYPES);
 
-    // Sorted by id, so a peer's table and ours can be compared without either
-    // side sorting first.
     let mut messages: Vec<_> = schema.messages().collect();
     messages.sort_by_key(|message| message.id);
 
@@ -133,12 +105,10 @@ pub fn handshake_file(
     Ok(out)
 }
 
-/// `Player` + `edge` → `PlayerEdge`.
 fn message_constant(model: &str, codec: &str) -> String {
     format!("{model}{}", crate::model::pascal_case(codec))
 }
 
-/// Two constants may not be spelled the same.
 fn check_constant_names(schema: &Schema) -> Result<(), String> {
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
 
@@ -162,7 +132,6 @@ fn check_constant_names(schema: &Schema) -> Result<(), String> {
     Ok(())
 }
 
-/// The message descriptor, identical in every generated `handshake.go`.
 const TYPES: &str = "\
 // CycloneMessage is one message: its id, its name, and the fingerprint of its
 // wire contract.
@@ -177,7 +146,6 @@ type CycloneMessage struct {
 
 ";
 
-/// The handshake itself, identical in every generated `handshake.go`.
 const HANDSHAKE: &str = r####"
 // CycloneHandshake is what a peer's fingerprints mean for this one.
 type CycloneHandshake int
@@ -240,7 +208,6 @@ func CycloneHandshakeCompare(peerSchemaFingerprint uint64, peerMessages []Cyclon
 }
 "####;
 
-/// The optional per-frame envelope, when `validate_message_fingerprint` is on.
 const ENVELOPE: &str = r####"// ==========================================================================
 // Per-frame validation - validate_message_fingerprint = true.
 //
@@ -286,7 +253,6 @@ func CycloneReadEnvelope(r *Reader) (CycloneMessage, error) {
 }
 "####;
 
-/// What stands in for the envelope when it is off.
 const ENVELOPE_OFF: &str = "\
 // Per-frame message validation is off, so no envelope is generated and no
 // frame carries one. Turn it on in cyclone.toml:

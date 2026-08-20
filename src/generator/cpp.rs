@@ -1,61 +1,3 @@
-//! One message → one C++ header.
-//!
-//! The C++ counterpart of [`super::rust`], [`super::go`] and [`super::csharp`].
-//! Same rule, same shape: a message is walked once, a field at a time, and
-//! each field appends one statement. Nothing is analysed on the way: a
-//! primitive is a table lookup, and anything else is another model's name
-//! spelled into a call.
-//!
-//! # Header-only, on purpose
-//!
-//! There is no `.cpp` half. Every method a generated `struct` declares is
-//! defined inside the struct body, which makes it implicitly `inline` -
-//! `#include`d from as many translation units as a project likes, with no
-//! separate compilation unit to add to a build and no risk of an ODR
-//! violation. This is the same reason [`super::gdscript`] settled on one
-//! `class_name` per file: the shape that needs the least from the surrounding
-//! build system wins.
-//!
-//! # What C++ needs that C#, Go and Rust do not
-//!
-//! A C++ codec is a physical `#include` away from the model it encodes, not
-//! only a name in scope: unlike C#'s "a fully-qualified name compiles with no
-//! `using`" or Go's "one `import` reaches a whole package", the header that
-//! declares `DeviceState` has to be named explicitly by every generated file
-//! that touches it. [`ModelLocation::include`] is where that path lives, read
-//! from the model's own source location; [`ModelLocation::namespace`] is the
-//! (optional) C++ namespace the model's own source opens, read the same way
-//! [`super::csharp::namespace_name`] reads C#'s - and unlike C#, a namespaced
-//! reference is always written with a leading `::` (`::Game::Models::Player`),
-//! because C++ - unlike C# - has no rule against a self-referential qualified
-//! name, so there is no "same namespace" special case to get right and no
-//! "own namespace" to track at all.
-//!
-//! # A generated model's fields are plain members, never properties
-//!
-//! Which means, unlike [`super::csharp`], a nested model's field is always
-//! addressable and can always be passed by reference directly - the same
-//! simplicity [`super::rust`] and [`super::go`] have, and C#'s `var
-//! local = value.Field; ...; value.Field = local;` workaround is never
-//! needed here.
-//!
-//! # The decoder, and RFC-0002 §9.1
-//!
-//! Identical policy to every other backend: a bare field asks
-//! `reader.field_absent()` before it reads, taking its zero value when the
-//! stream already ended; array *elements* are read strictly, once the count
-//! says they exist; a nested model is decoded through its own codec
-//! unconditionally, which asks the same question of every one of *its*
-//! fields.
-//!
-//! # A deliberate gap: `Array<Array<T>>`
-//!
-//! Refused with a clear error rather than generated wrong - the same choice
-//! [`super::go`], [`super::csharp`] and [`super::gdscript`] make, and for the
-//! same reason: the element-type table this generator's whole knowledge of
-//! C++ types lives in has no entry for `Array<T>` itself, only for what `T`
-//! can be.
-
 use std::collections::BTreeSet;
 
 use crate::ir::{Field, Message, Model, WireType};
@@ -63,11 +5,6 @@ use crate::model::snake_case;
 
 use super::codec_type_name;
 
-/// The C++ namespace every generated file in one run shares, derived from
-/// `--out`'s own directory name - the C++ counterpart of
-/// [`super::go::package_name_from_out`] and [`super::csharp::namespace_from_out`],
-/// lowercase because that is the more common convention for a C++ namespace
-/// (`std`, `boost`, ...) where C#'s is PascalCase.
 pub fn namespace_from_out(out: &std::path::Path) -> String {
     let basename = out
         .file_name()
@@ -76,10 +13,6 @@ pub fn namespace_from_out(out: &std::path::Path) -> String {
     sanitize_namespace(basename)
 }
 
-/// A C++ identifier is letters, digits and `_`, may not start with a digit,
-/// and may not be a reserved word. `--out`'s basename rarely needs any of
-/// this, but a generator that trusts a directory name unchecked is a
-/// generator that picks today to find out `--out 2fast` does not compile.
 fn sanitize_namespace(text: &str) -> String {
     let mut out: String = text
         .chars()
@@ -172,15 +105,7 @@ const CPP_KEYWORDS: &[&str] = &[
     "while",
 ];
 
-/// The runtime method each primitive maps to, and the C++ type it reads or
-/// writes.
-///
-/// This table is the whole of the generator's type knowledge. Every name in
-/// it comes from RFC-0002's Reader / Writer interface, spelled the way
-/// [`super::cpp_runtime`] spells it; a name that is not in it is another
-/// model, and the call is spelled and left for the C++ compiler to resolve.
 fn primitive(ty: &WireType) -> Option<(&'static str, &'static str, &'static str)> {
-    // (writer method, reader method, C++ type)
     Some(match ty {
         WireType::Bool => ("write_bool", "read_bool", "bool"),
         WireType::I8 => ("write_i8", "read_i8", "std::int8_t"),
@@ -199,10 +124,6 @@ fn primitive(ty: &WireType) -> Option<(&'static str, &'static str, &'static str)
     })
 }
 
-/// The C++ zero-value expression for a field the stream ended before
-/// (RFC-0002 §9.1). Only ever called for a primitive: an array's absence is
-/// its own zero element count, and a model field has no zero expression of
-/// its own - see [`decode_field`].
 fn zero(ty: &WireType) -> &'static str {
     match ty {
         WireType::Bool => "false",
@@ -216,44 +137,20 @@ fn zero(ty: &WireType) -> &'static str {
     }
 }
 
-/// The generated file name: `Player` + `edge` → `player_edge.hpp`.
 pub fn file_name(model: &str, codec: &str) -> String {
     format!("{}_{}.hpp", snake_case(model), snake_case(codec))
 }
 
-/// Where one model's C++ type is declared.
 pub struct ModelLocation {
-    /// The `#include` path of the header the model's own source lives in,
-    /// e.g. `src/models/device_state.hpp` - always the model's own source
-    /// path exactly as `--src` and the file system gave it (the same path
-    /// `schema.json`'s own `source` field records), and never affected by
-    /// `--model-path`: the physical header a generated file has to name is
-    /// not something any override can change, only where the compiler is
-    /// told to look for it (a `-I` search path rooted wherever that source
-    /// path is itself rooted from - typically the project root, where
-    /// `cyclone.toml` lives - which is the project's concern, not this
-    /// generator's).
     pub include: String,
-    /// The namespace the model's own source opens, if any - `--model-path`
-    /// overrides this uniformly for every model, the same as it does for
-    /// C#'s namespace and Go's import path.
     pub namespace: Option<String>,
 }
 
-/// Where every model this run parsed can be reached from inside a generated
-/// C++ file.
 pub struct Imports<'a> {
     pub locations: &'a std::collections::BTreeMap<String, ModelLocation>,
 }
 
 impl Imports<'_> {
-    /// How a model's type is spelled in generated code: always fully
-    /// qualified with a leading `::`, whether or not it has a namespace -
-    /// `::Game::Models::Player`, or bare `::Player` for one in no namespace
-    /// at all. Unlike Go's or C#'s `qualify`, this needs no "is it the same
-    /// namespace as the one this file opens" case: a leading `::` always
-    /// compiles, from anywhere, so there is nothing to get wrong by always
-    /// writing one.
     fn qualify(&self, model: &str) -> String {
         match self
             .locations
@@ -261,21 +158,11 @@ impl Imports<'_> {
             .and_then(|location| location.namespace.as_deref())
         {
             Some(namespace) => format!("::{namespace}::{model}"),
-            // No namespace, or a model this run never parsed (a hand-written
-            // type): spelled bare with a leading `::`, left for the C++
-            // compiler to resolve - the same "leave it to the host compiler"
-            // policy every other backend applies.
             None => format!("::{model}"),
         }
     }
 }
 
-/// Refuses `Array<Array<T>>` before any text is generated - see the module
-/// docs' "deliberate gap".
-///
-/// # Errors
-///
-/// A field whose type nests one `Array` inside another.
 pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     for field in &model.fields {
         if let WireType::Array(element) = &field.ty {
@@ -291,8 +178,6 @@ pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     Ok(())
 }
 
-/// Renders one codec file: the header, the `#include`s, the codec type, its
-/// constants, and its `encode` / `decode`.
 pub fn codec_file(
     model: &Model,
     message: &Message,
@@ -353,7 +238,6 @@ pub fn codec_file(
         message.fingerprint.u64()
     ));
 
-    // -------------------------------------------------------------- encode
     out.push_str(&format!(
         "    /// Writes the {:?} fields of `value`, in declaration order.\n",
         message.codec
@@ -372,7 +256,6 @@ pub fn codec_file(
         out.push_str("    }\n\n");
     }
 
-    // -------------------------------------------------------------- decode
     out.push_str(&format!(
         "    /// Reads the {:?} fields into `value`, in declaration order.\n",
         message.codec
@@ -407,9 +290,6 @@ pub fn codec_file(
     out
 }
 
-/// The `#include` block at the top of a codec file: the runtime, the model
-/// this codec encodes and every model an array element spells out by name,
-/// and the codec headers of every nested model this one calls.
 fn write_includes(out: &mut String, model: &Model, message: &Message, imports: &Imports<'_>) {
     out.push_str("#include <cstddef>\n");
     out.push_str("#include <cstdint>\n");
@@ -433,13 +313,11 @@ fn write_includes(out: &mut String, model: &Model, message: &Message, imports: &
         out.push_str(&format!("#include \"{include}\"\n"));
     }
 
-    // The codecs this one calls for its nested models.
     let mut codecs: BTreeSet<String> = BTreeSet::new();
     for field in &message.fields {
         let Some(name) = field.ty.model_name() else {
             continue;
         };
-        // A model that references itself is in this very file already.
         if name == model.name {
             continue;
         }
@@ -451,8 +329,6 @@ fn write_includes(out: &mut String, model: &Model, message: &Message, imports: &
 
     out.push('\n');
 }
-
-// =================================================================== encoding
 
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let place = format!("value.{}", field.name);
@@ -470,8 +346,6 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
     encode_scalar(out, &field.ty, &place, codec, "        ");
 }
 
-/// Writes one non-array value - a bare field, or an array element (never an
-/// array itself: `check_no_nested_arrays` has already refused that case).
 fn encode_scalar(out: &mut String, ty: &WireType, place: &str, codec: &str, pad: &str) {
     match primitive(ty) {
         Some((writer_method, ..)) => {
@@ -487,14 +361,9 @@ fn encode_scalar(out: &mut String, ty: &WireType, place: &str, codec: &str, pad:
     }
 }
 
-// =================================================================== decoding
-
 fn decode_field(out: &mut String, field: &Field, codec: &str, imports: &Imports<'_>) {
     let place = format!("value.{}", field.name);
 
-    // A nested model needs no absence check of its own: its codec asks the
-    // same question of every one of its fields, so an absent nested model
-    // zeroes them all without reading a byte.
     if let Some(name) = as_model(&field.ty) {
         let nested = codec_type_name(name, codec);
         out.push_str(&format!(
@@ -538,9 +407,6 @@ fn decode_field(out: &mut String, field: &Field, codec: &str, imports: &Imports<
     out.push_str("        }\n");
 }
 
-/// Decodes one array element - strictly, unlike a field: the count already
-/// promised this element exists, so a stream that ends here is truncated, not
-/// skewed - and appends it to `elements_local`.
 fn decode_element_into(
     out: &mut String,
     ty: &WireType,
@@ -575,8 +441,6 @@ fn decode_element_into(
     }
 }
 
-/// `T`'s C++ type name for `Array<T>`'s `std::vector<T>` local - the
-/// primitive table's own spelling, or a qualified model reference.
 fn element_type_name(ty: &WireType, imports: &Imports<'_>) -> String {
     match primitive(ty) {
         Some((_, _, cpp_type)) => cpp_type.to_owned(),
@@ -584,9 +448,6 @@ fn element_type_name(ty: &WireType, imports: &Imports<'_>) -> String {
     }
 }
 
-/// The model name of a bare model type - `Array<T>` is not one, because an
-/// array is decoded element by element and only *its elements* may be
-/// models.
 fn as_model(ty: &WireType) -> Option<&str> {
     match ty {
         WireType::Model(name) => Some(name),
@@ -718,7 +579,6 @@ mod tests {
             ),
             "{text}"
         );
-        // No C#-style local round-trip: the field is addressable directly.
         assert!(!text.contains("var infoValue"), "{text}");
     }
 

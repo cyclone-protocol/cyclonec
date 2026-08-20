@@ -1,89 +1,8 @@
-//! One message → one GDScript file.
-//!
-//! The GDScript counterpart of [`super::rust`], [`super::go`] and
-//! [`super::csharp`]. Same rule, same shape: a message is walked once, a
-//! field at a time, and each field appends one statement. The network type is
-//! looked up in [`primitive`], and anything not in that table is another
-//! model's name, spelled into a call - `cyclonec` never checks that the call
-//! resolves; Godot's own script compiler does.
-//!
-//! # One file, one `class_name`, no import
-//!
-//! `cyclonec_old`'s GDScript backend wrote one file for the whole project,
-//! wrapping every runtime type and every codec inside one fixed `class_name`,
-//! because GDScript's own global reachability only works through a file's
-//! `class_name`, and a project has exactly one shot at declaring it per file.
-//! This project's architecture already writes one file per model per codec
-//! (see [`crate::ir`]'s module docs), which turns out to fit that constraint
-//! *better* than one big file does: every codec file here declares its own
-//! `class_name` - `PlayerEdgeCodec`, say - and Godot makes it reachable
-//! project-wide with nothing to `preload`, exactly the "nothing to add,
-//! nothing to import" guarantee every sibling backend gives, applied per file
-//! instead of once for the whole tree.
-//!
-//! One consequence: unlike [`super::go`] (which qualifies a cross-package
-//! model reference) and [`super::csharp`] (which qualifies a cross-namespace
-//! one), this backend never qualifies anything at all. A model's own
-//! `class_name` is already globally reachable from any generated file with no
-//! declaration of where it lives, so every model reference here - the value
-//! parameter's own type, a nested field, an array element - is always spelled
-//! bare. There is no `Imports` type in this module because there is nothing
-//! for one to resolve.
-//!
-//! # What changed from `cyclonec_old`, beyond the file layout
-//!
-//! Two things follow directly from no longer being squeezed into one shared
-//! wrapper file:
-//!
-//! - `cyclonec_old` made every codec an ordinary class instantiated with
-//!   `.new()`, specifically to dodge an unresolved question about whether a
-//!   `static func` is well-formed *inside a nested class* (see
-//!   [`super::gdscript_runtime`]'s module docs) - never shown as a combined
-//!   example, and not checkable without a Godot binary this project's own
-//!   tests cannot run. That question does not apply here: `encode` and
-//!   `decode` below are declared at a codec file's own top level, which is
-//!   unambiguously, and very ordinarily, where a GDScript `static func`
-//!   belongs. So they are `static`, callable directly as
-//!   `PlayerEdgeCodec.encode(writer, value)` with nothing to instantiate -
-//!   closer to every other backend's ergonomics than `cyclonec_old` could get
-//!   with one shared file.
-//! - RFC-0002 §9.1: a bare field asks `reader.field_absent()` before it
-//!   reads, taking its zero value when the stream already ended; array
-//!   *elements* are read strictly, once the count says they exist; a nested
-//!   model is decoded through its own codec unconditionally, which asks the
-//!   same question of every one of *its* fields. Identical policy to every
-//!   other backend - see [`super::gdscript_runtime`] for the runtime method
-//!   this is built on, which `cyclonec_old`'s runtime did not have.
-//!
-//! # `int` is signed, a fingerprint is not
-//!
-//! GDScript's only integer type is a 64-bit *signed* `int` - there is no
-//! `u64`. A fingerprint is an opaque 64-bit bit pattern, not a magnitude, and
-//! a literal like `0xFFFFFFFFFFFFFFFF` risks being rejected or misparsed by
-//! a literal parser that was only ever asked to handle values up to
-//! `i64::MAX`. Rather than trust that untested, every 64-bit constant this
-//! backend writes ([`u64_literal`]) is built from two 32-bit halves, each
-//! safely positive on its own, combined with a shift and a bitwise or - both
-//! well inside GDScript's ordinary, unambiguous integer arithmetic. Message
-//! ids stay plain hex literals: a `u32` value is always positive as a signed
-//! 64-bit `int`, so it never has this problem.
-//!
-//! # A deliberate gap: `Array<Array<T>>`
-//!
-//! Refused with a clear error rather than generated wrong, the same choice
-//! [`super::go`] and [`super::csharp`] make and for the same reason: the
-//! element-type table this generator's whole knowledge of GDScript types
-//! lives in has no entry for `Array<T>` itself, only for what `T` can be.
-
 use crate::ir::{Field, Message, Model, WireType};
 use crate::model::snake_case;
 
 use super::codec_type_name;
 
-/// What a generated GDScript file's header says about itself - the GDScript
-/// counterpart of [`super::Header`], spelled with `#` instead of `//`, since
-/// `#` is GDScript's only line comment syntax (`//` is integer division, and
-/// would not compile as a comment at all).
 #[derive(Default)]
 pub struct Header<'a> {
     pub source: Option<&'a str>,
@@ -94,8 +13,6 @@ pub struct Header<'a> {
 }
 
 impl Header<'_> {
-    /// Renders the header, ending in a blank line - see [`super::Header::render`]
-    /// for the shape this mirrors.
     pub fn render(&self) -> String {
         let mut out = String::with_capacity(512);
         out.push_str(super::GDSCRIPT_MARKER);
@@ -135,15 +52,7 @@ impl Header<'_> {
     }
 }
 
-/// The runtime method each primitive maps to.
-///
-/// This table is the whole of the generator's type knowledge. Every name in
-/// it comes from RFC-0002's Reader / Writer interface, spelled the way
-/// [`super::gdscript_runtime`] spells it; a name that is not in it is another
-/// model, and the call is spelled and left for Godot's own script compiler to
-/// resolve.
 fn primitive(ty: &WireType) -> Option<(&'static str, &'static str)> {
-    // (writer method, reader method)
     Some(match ty {
         WireType::Bool => ("write_bool", "read_bool"),
         WireType::I8 => ("write_i8", "read_i8"),
@@ -162,10 +71,6 @@ fn primitive(ty: &WireType) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// The GDScript zero-value expression for a field the stream ended before
-/// (RFC-0002 §9.1). Only ever called for a primitive: an array's absence is
-/// its own zero element count, and a model field has no zero expression of
-/// its own - see [`decode_field`].
 fn zero(ty: &WireType) -> &'static str {
     match ty {
         WireType::Bool => "false",
@@ -178,18 +83,10 @@ fn zero(ty: &WireType) -> &'static str {
     }
 }
 
-/// A `u32` value as a plain hex literal - always positive in GDScript's
-/// signed 64-bit `int`, so it needs none of [`u64_literal`]'s care. Shared
-/// with [`super::gdscript_handshake`], which writes the same kind of
-/// constant.
 pub fn u32_literal(value: u32) -> String {
     format!("0x{value:08X}")
 }
 
-/// A `u64` value spelled as a GDScript `int` literal that is safe regardless
-/// of whether its top bit is set - see the module docs' "`int` is signed, a
-/// fingerprint is not". Shared with [`super::gdscript_handshake`], which
-/// writes every fingerprint constant this way too.
 pub fn u64_literal(value: u64) -> String {
     let high = (value >> 32) as u32;
     let low = value as u32;
@@ -200,17 +97,10 @@ pub fn u64_literal(value: u64) -> String {
     }
 }
 
-/// The generated file name: `Player` + `edge` → `player_edge.gd`.
 pub fn file_name(model: &str, codec: &str) -> String {
     format!("{}_{}.gd", snake_case(model), snake_case(codec))
 }
 
-/// Refuses `Array<Array<T>>` before any text is generated - see the module
-/// docs' "deliberate gap".
-///
-/// # Errors
-///
-/// A field whose type nests one `Array` inside another.
 pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     for field in &model.fields {
         if let WireType::Array(element) = &field.ty {
@@ -226,8 +116,6 @@ pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     Ok(())
 }
 
-/// Renders one codec file: the header, the `class_name`, the codec's
-/// constants, and its `encode` / `decode`.
 pub fn codec_file(model: &Model, message: &Message) -> String {
     let mut out = Header {
         source: Some(&model.source),
@@ -275,7 +163,6 @@ pub fn codec_file(model: &Model, message: &Message) -> String {
         u64_literal(message.fingerprint.u64())
     ));
 
-    // -------------------------------------------------------------- encode
     out.push_str(&format!(
         "# Writes the {:?} fields of value, in declaration order.\n",
         message.codec
@@ -293,7 +180,6 @@ pub fn codec_file(model: &Model, message: &Message) -> String {
     }
     out.push('\n');
 
-    // -------------------------------------------------------------- decode
     out.push_str(&format!(
         "# Reads the {:?} fields into value, in declaration order.\n",
         message.codec
@@ -323,8 +209,6 @@ pub fn codec_file(model: &Model, message: &Message) -> String {
     out
 }
 
-// =================================================================== encoding
-
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let place = format!("value.{}", field.name);
 
@@ -344,8 +228,6 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
     encode_scalar(out, &field.ty, &place, codec, "\t");
 }
 
-/// Writes one non-array value - a bare field, or an array element (never an
-/// array itself: `check_no_nested_arrays` has already refused that case).
 fn encode_scalar(out: &mut String, ty: &WireType, place: &str, codec: &str, pad: &str) {
     match primitive(ty) {
         Some((writer_method, _)) => {
@@ -361,17 +243,10 @@ fn encode_scalar(out: &mut String, ty: &WireType, place: &str, codec: &str, pad:
     }
 }
 
-// =================================================================== decoding
-
 fn decode_field(out: &mut String, field: &Field, codec: &str) {
     let place = format!("value.{}", field.name);
     let name = &field.name;
 
-    // A nested model needs no absence check of its own: its codec asks the
-    // same question of every one of its fields, so an absent nested model
-    // zeroes them all without reading a byte. It is already an Object
-    // reference (`value.{name}` must already hold an instance), so it is
-    // mutated in place - no C#-style local-variable round trip needed.
     if let Some(model_name) = as_model(&field.ty) {
         let nested = codec_type_name(model_name, codec);
         out.push_str(&format!(
@@ -411,9 +286,6 @@ fn decode_field(out: &mut String, field: &Field, codec: &str) {
     out.push_str(&format!("\t\t{place} = {name}_result[0]\n"));
 }
 
-/// Decodes one array element - strictly, unlike a field: the count already
-/// promised this element exists, so a stream that ends here is truncated,
-/// not skewed - and appends it to `{name}_elements`.
 fn decode_element(out: &mut String, ty: &WireType, name: &str, codec: &str) {
     match as_model(ty) {
         Some(model_name) => {
@@ -440,9 +312,6 @@ fn decode_element(out: &mut String, ty: &WireType, name: &str, codec: &str) {
     }
 }
 
-/// The model name of a bare model type - `Array<T>` is not one, because an
-/// array is decoded element by element and only *its elements* may be
-/// models.
 fn as_model(ty: &WireType) -> Option<&str> {
     match ty {
         WireType::Model(name) => Some(name),
@@ -653,9 +522,6 @@ mod tests {
 
     #[test]
     fn a_64_bit_value_with_its_top_bit_set_is_split_not_a_bare_wide_literal() {
-        // A regression test for the "int is signed" gap: a value whose top
-        // bit is set must never be spelled as one bare 16-digit hex literal,
-        // which risks overflowing GDScript's signed 64-bit int.
         assert_eq!(super::u64_literal(0x0000_0000_0000_002A), "0x0000002A");
         assert_eq!(
             super::u64_literal(0xFFFF_FFFF_FFFF_FFFF),

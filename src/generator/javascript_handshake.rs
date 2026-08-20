@@ -1,29 +1,11 @@
-//! `handshake.js` - the fingerprints, generated.
-//!
-//! The JavaScript counterpart of [`super::typescript_handshake`] - same
-//! contract, same safety property, same reasoning for why every fingerprint
-//! is a `bigint`. JavaScript has no `enum`, so [`CycloneHandshake`] below is
-//! generated as a frozen object of named constants - the idiomatic
-//! JavaScript shape for a closed set of values, and the same shape
-//! [`super::go_handshake`]'s `iota`-based Go constants take for the same
-//! reason.
-
 use std::collections::BTreeMap;
 
 use crate::ir::Schema;
 use crate::model::screaming_snake_case;
 use crate::schema::hex64;
 
-/// The file name, relative to the output directory.
 pub const FILE_NAME: &str = "handshake.js";
 
-/// Renders `handshake.js`.
-///
-/// # Errors
-///
-/// Two constants that would be spelled the same - a model named `PlayerEdge`
-/// beside a `Player` with an `edge` codec. Rare, mechanical, and far better
-/// reported here than as a redeclaration error at import time.
 pub fn handshake_file(
     schema: &Schema,
     validate_message_fingerprint: bool,
@@ -85,8 +67,6 @@ pub fn handshake_file(
         out.push('\n');
     }
 
-    // Sorted by id, so a peer's table and ours can be compared without
-    // either side sorting first.
     let mut messages: Vec<_> = schema.messages().collect();
     messages.sort_by_key(|message| message.id);
 
@@ -124,7 +104,6 @@ pub fn handshake_file(
     Ok(out)
 }
 
-/// `Player` + `edge` → `PLAYER_EDGE`.
 fn message_constant(model: &str, codec: &str) -> String {
     format!(
         "{}_{}",
@@ -133,7 +112,6 @@ fn message_constant(model: &str, codec: &str) -> String {
     )
 }
 
-/// Two constants may not be spelled the same.
 fn check_constant_names(schema: &Schema) -> Result<(), String> {
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
 
@@ -157,7 +135,6 @@ fn check_constant_names(schema: &Schema) -> Result<(), String> {
     Ok(())
 }
 
-/// The handshake itself, identical in every generated `handshake.js`.
 const HANDSHAKE: &str = "\
 /** What a peer's fingerprints mean for this one. */
 export const CycloneHandshake = Object.freeze({
@@ -224,7 +201,6 @@ export function cycloneHandshake(peerSchemaFingerprint, peerMessages) {
 }
 ";
 
-/// The optional per-frame envelope, when `validate_message_fingerprint` is on.
 const ENVELOPE: &str = "\
 // ==========================================================================
 // Per-frame validation - validate_message_fingerprint = true.
@@ -298,7 +274,6 @@ export function cycloneReadEnvelope(reader) {
 }
 ";
 
-/// What stands in for the envelope when it is off.
 const ENVELOPE_OFF: &str = "\
 // Per-frame message validation is off, so no envelope is generated and no
 // frame carries one. Turn it on in cyclone.toml:

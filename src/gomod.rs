@@ -1,25 +1,5 @@
-//! `go.mod` - just enough to compute an import path.
-//!
-//! Go resolves an import path from two things: the `module` line of the
-//! nearest enclosing `go.mod`, and the directory a package sits in relative to
-//! it. That is the entire reason this file exists - to read the one line and
-//! do that join - not to understand `require`, `replace`, `go`, or anything
-//! else `go.mod` may hold.
-//!
-//! ```text
-//! go.mod:  module github.com/acme/game
-//! package: internal/models/player.go
-//! import path:  github.com/acme/game/internal/models
-//! ```
-
 use std::path::{Path, PathBuf};
 
-/// The nearest `go.mod` at or above `start`, and the module path its `module`
-/// line declares.
-///
-/// # Errors
-///
-/// A `go.mod` was found but has no `module` line, or cannot be read.
 pub fn find(start: &Path) -> Result<Option<(PathBuf, String)>, String> {
     let mut directory = Some(start);
 
@@ -38,7 +18,6 @@ pub fn find(start: &Path) -> Result<Option<(PathBuf, String)>, String> {
     Ok(None)
 }
 
-/// The path after a top-level `module` line, if there is one.
 fn module_line(text: &str) -> Option<String> {
     for line in text.lines() {
         let line = line.trim();
@@ -52,12 +31,6 @@ fn module_line(text: &str) -> Option<String> {
     None
 }
 
-/// The import path of the package `relative_source` (a `.go` file, relative to
-/// the module root) lives in.
-///
-/// Go imports a **directory**, never a file, so the file name itself is
-/// dropped - `player.go` and `team.go` in the same directory share one import
-/// path.
 pub fn import_path(module: &str, relative_source: &Path) -> String {
     match relative_source.parent() {
         Some(directory) => import_path_of_dir(module, directory),
@@ -65,10 +38,6 @@ pub fn import_path(module: &str, relative_source: &Path) -> String {
     }
 }
 
-/// The import path of the package that lives in `relative_dir`, a directory
-/// relative to the module root - the same join [`import_path`] does for a
-/// file, applied directly to a directory (what a generated package's own
-/// `--out` needs, since there is no file to drop).
 pub fn import_path_of_dir(module: &str, relative_dir: &Path) -> String {
     let mut parts = vec![module.trim_end_matches('/').to_owned()];
 

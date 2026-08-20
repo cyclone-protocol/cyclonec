@@ -1,25 +1,3 @@
-//! One message → one JavaScript file.
-//!
-//! The JavaScript counterpart of [`super::typescript`] - see its module docs
-//! for the reasoning this backend shares in full: the same runtime calls,
-//! the same "construct a nested model with `new` if it is not there yet"
-//! rule, the same RFC-0002 §9.1 decode policy, the same refusal of
-//! `Array<Array<T>>`. The only difference is the surface syntax: no type
-//! annotations, `@param`/`@returns` JSDoc in their place, and `.js` instead
-//! of `.ts` - the wire format the two backends emit is identical (checked in
-//! `tests/cli.rs`), because both are the same walk over the same
-//! [`crate::ir`] message.
-//!
-//! # What JavaScript does not need imported
-//!
-//! Unlike [`super::typescript`], a generated file here never spells `Writer`
-//! or `Reader` by name - a JS function parameter carries no type, so nothing
-//! ever names those classes outside a comment - and the model a codec
-//! encodes and decodes is imported only if this file actually constructs one
-//! with `new` (a nested model field, or an array of them); the model a codec
-//! *belongs to* is never constructed in its own file and so is never
-//! imported at all.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::{Field, Message, Model, WireType};
@@ -27,10 +5,6 @@ use crate::model::snake_case;
 
 use super::codec_type_name;
 
-/// The runtime method each primitive maps to. Unlike
-/// [`super::typescript::primitive`] this carries no host type - JavaScript
-/// has none to spell - only what [`super::typescript_runtime`] (identical
-/// method names) calls it.
 fn primitive(ty: &WireType) -> Option<(&'static str, &'static str)> {
     Some(match ty {
         WireType::Bool => ("writeBool", "readBool"),
@@ -50,8 +24,6 @@ fn primitive(ty: &WireType) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// The JSDoc `@param`/`@returns` type spelling for a wire type - the closest
-/// JavaScript comes to [`super::typescript::primitive`]'s host type column.
 fn jsdoc_type(ty: &WireType) -> String {
     match ty {
         WireType::Bool => "boolean".to_owned(),
@@ -71,10 +43,6 @@ fn jsdoc_type(ty: &WireType) -> String {
     }
 }
 
-/// The JavaScript zero-value expression for a field the stream ended before
-/// (RFC-0002 §9.1). Never called for [`WireType::Array`] or
-/// [`WireType::Model`] - see [`super::typescript::zero`], which this mirrors
-/// exactly.
 fn zero(ty: &WireType) -> &'static str {
     match ty {
         WireType::Bool => "false",
@@ -87,7 +55,6 @@ fn zero(ty: &WireType) -> &'static str {
     }
 }
 
-/// The generated file name: `Player` + `edge` → `player_edge.js`.
 pub fn file_name(model: &str, codec: &str) -> String {
     format!("{}_{}.js", snake_case(model), snake_case(codec))
 }
@@ -96,23 +63,14 @@ fn module_stem(model: &str, codec: &str) -> String {
     format!("{}_{}", snake_case(model), snake_case(codec))
 }
 
-/// Where one model's own class is declared - see [`super::typescript::ModelLocation`].
 pub struct ModelLocation {
     pub specifier: String,
 }
 
-/// Where every model this run parsed can be reached from inside a generated
-/// JavaScript file.
 pub struct Imports<'a> {
     pub locations: &'a BTreeMap<String, ModelLocation>,
 }
 
-/// Refuses `Array<Array<T>>` before any text is generated - see
-/// [`super::typescript::check_no_nested_arrays`], which this mirrors exactly.
-///
-/// # Errors
-///
-/// A field whose type nests one `Array` inside another.
 pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     for field in &model.fields {
         if let WireType::Array(element) = &field.ty {
@@ -128,8 +86,6 @@ pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     Ok(())
 }
 
-/// Renders one codec file: the header, its imports, the codec class, its
-/// constants, and its `encode`/`decode`.
 pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> String {
     let mut out = super::Header {
         source: Some(&model.source),
@@ -182,7 +138,6 @@ pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> St
         crate::schema::hex64(message.fingerprint.u64())
     ));
 
-    // -------------------------------------------------------------- encode
     out.push_str(&format!(
         "    /**\n     * Writes the `{}` fields of `value`, in declaration order.\n     *\n     \
          * @param {{Writer}} writer\n     * @param {{{}}} value\n     */\n",
@@ -194,7 +149,6 @@ pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> St
     }
     out.push_str("    }\n\n");
 
-    // -------------------------------------------------------------- decode
     out.push_str(&format!(
         "    /**\n     * Reads the `{}` fields into `value`, in declaration order.\n     *\n",
         message.codec
@@ -220,15 +174,9 @@ pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> St
     out
 }
 
-/// The `import` block at the top of a codec file - see
-/// [`super::typescript::write_imports`], which this mirrors except that the
-/// model a codec belongs to is imported only if a `new` of it actually
-/// appears in this file (see the module docs).
 fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &Imports<'_>) {
     let mut groups: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
 
-    // Every model this file constructs with `new` - a bare nested-model
-    // field, or an array of them.
     let mut constructed: BTreeSet<&str> = BTreeSet::new();
     for field in &message.fields {
         match &field.ty {
@@ -252,8 +200,6 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
         }
     }
 
-    // The codecs this one calls for its nested models - bare fields and
-    // array elements alike.
     let mut codec_specifiers: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for field in &message.fields {
         let Some(name) = field.ty.model_name() else {
@@ -268,10 +214,6 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
             .insert(codec_type_name(name, &message.codec));
     }
 
-    // Every specifier ends in `.js`: unlike `super::typescript`'s output,
-    // this file is run directly - by Node's ESM loader, or by a browser's -
-    // neither of which resolves an extensionless relative specifier the way
-    // a bundler or `tsc` would.
     for (specifier, names) in &groups {
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
         out.push_str(&format!(
@@ -290,8 +232,6 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
         out.push('\n');
     }
 }
-
-// =================================================================== encoding
 
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let place = format!("value.{}", field.name);
@@ -323,8 +263,6 @@ fn encode_scalar(out: &mut String, ty: &WireType, place: &str, codec: &str, pad:
         }
     }
 }
-
-// =================================================================== decoding
 
 fn decode_field(out: &mut String, field: &Field, codec: &str) {
     let place = format!("value.{}", field.name);
@@ -478,9 +416,6 @@ mod tests {
 
     #[test]
     fn the_top_level_model_is_never_imported() {
-        // Nothing in Player's own edge codec constructs a `Player`, and a
-        // JS function parameter carries no type - so unlike TypeScript,
-        // nothing here ever needs to import it.
         let text = generated(&[("Id", "u32")]);
         assert!(!text.contains("import { Player"), "{text}");
     }

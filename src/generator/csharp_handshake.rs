@@ -1,37 +1,11 @@
-//! `Handshake.cs` - the fingerprints, generated.
-//!
-//! The C# counterpart of [`super::handshake`] and [`super::go_handshake`] -
-//! same contract, same safety property:
-//!
-//! ```text
-//! peer schema fingerprint == ours               -> Current    accept
-//! a message both ends know, fingerprints differ -> Reject     disconnect
-//! otherwise                                      -> Outdated   accept
-//! ```
-//!
-//! C# has no top-level `const` or `static` outside a type, so where Go writes
-//! every fingerprint as a package-level constant, this backend gathers them -
-//! and the lookup table and the compare function that go with them - into one
-//! `public static class Handshake`. [`CycloneMessage`] and
-//! [`CycloneHandshake`] are ordinary namespace-level types beside it, the
-//! same shape they have in every other backend.
-
 use std::collections::BTreeMap;
 
 use crate::ir::Schema;
 use crate::model::pascal_case;
 use crate::schema::hex64;
 
-/// The file name, relative to the output directory.
 pub const FILE_NAME: &str = "Handshake.cs";
 
-/// Renders `Handshake.cs`.
-///
-/// # Errors
-///
-/// Two constants that would be spelled the same - a model named `PlayerEdge`
-/// beside a `Player` with an `edge` codec. Rare, mechanical, and far better
-/// reported here than as a redefinition error in the user's build.
 pub fn handshake_file(
     schema: &Schema,
     namespace: &str,
@@ -100,8 +74,6 @@ pub fn handshake_file(
         out.push('\n');
     }
 
-    // Sorted by id, so a peer's table and ours can be compared without either
-    // side sorting first.
     let mut messages: Vec<_> = schema.messages().collect();
     messages.sort_by_key(|message| message.id);
 
@@ -141,12 +113,10 @@ pub fn handshake_file(
     Ok(out)
 }
 
-/// `Player` + `edge` → `PlayerEdge`.
 fn message_constant(model: &str, codec: &str) -> String {
     format!("{model}{}", pascal_case(codec))
 }
 
-/// Two constants may not be spelled the same.
 fn check_constant_names(schema: &Schema) -> Result<(), String> {
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
 
@@ -170,8 +140,6 @@ fn check_constant_names(schema: &Schema) -> Result<(), String> {
     Ok(())
 }
 
-/// The message descriptor and the handshake verdict, identical in every
-/// generated `Handshake.cs`.
 const TYPES: &str = r####"/// <summary>One message: its id, its name, and the fingerprint of its wire
 /// contract.</summary>
 public readonly struct CycloneMessage
@@ -220,9 +188,6 @@ public enum CycloneHandshake
 
 "####;
 
-/// The lookup and compare functions, identical in every generated
-/// `Handshake.cs` - appended right after the generated `CycloneMessages`
-/// table they read.
 const HANDSHAKE: &str = r####"
     /// <summary>The message with this id, if this schema declares it.</summary>
     public static CycloneMessage? CycloneMessageById(uint id)
@@ -275,8 +240,6 @@ const HANDSHAKE: &str = r####"
     }
 "####;
 
-/// The optional per-frame envelope, when `validate_message_fingerprint` is
-/// on.
 const ENVELOPE: &str = r####"
     // ======================================================================
     // Per-frame validation - validate_message_fingerprint = true.
@@ -336,7 +299,6 @@ const ENVELOPE: &str = r####"
     }
 "####;
 
-/// What stands in for the envelope when it is off.
 const ENVELOPE_OFF: &str = r####"
     // Per-frame message validation is off, so no envelope is generated and no
     // frame carries one. Turn it on in cyclone.toml:

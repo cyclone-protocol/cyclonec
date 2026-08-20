@@ -12,46 +12,46 @@
       ],
       "outputs": [
         {
-          "path": "src/generated/player_edge.go",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/go-old/player_edge.go",
           "model": "Player",
           "codec": "edge",
           "fingerprint": "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564",
-          "sha256": "44c1e9ff56c37704e5a8f0331eb04098ceb86c6266a6682c0687ea476b98f116"
+          "sha256": "b72b1c7dcf73f8289eb5e1ad715fe8a6b286aa780a7661a8106fc487381727d7"
         },
         {
-          "path": "src/generated/player_unity.go",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/go-old/player_unity.go",
           "model": "Player",
           "codec": "unity",
           "fingerprint": "sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657",
-          "sha256": "69f9ebb1952203f541fba60f1a4c8446aa41d98240eb80b66b985f0ecb07d7f0"
+          "sha256": "720d7ae4cd411ce3d701cb5130525540f4faf90a21d305874ed4671453013c69"
         },
         {
-          "path": "src/generated/player_info_edge.go",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/go-old/player_info_edge.go",
           "model": "PlayerInfo",
           "codec": "edge",
           "fingerprint": "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c",
-          "sha256": "947cb791b2195d36507281639d73639fb0424dc65cff666a98864a6249f0ed61"
+          "sha256": "8ff617d5dc53340fa562bb6cc4daf14d718aa18b3414a319b0af4f4042e27e68"
         },
         {
-          "path": "src/generated/team_edge.go",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/go-old/team_edge.go",
           "model": "Team",
           "codec": "edge",
           "fingerprint": "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605",
-          "sha256": "aad585dad0e8056319f68bb0e1972472a99a7c9ddfc3d21e7e366074460a8ced"
+          "sha256": "9d761aa76345713953316b3ddb9bc0cc958ed37a372ec3248672a118bc05a1ff"
         }
       ]
     }
   },
   "shared": [
     {
-      "path": "src/generated/runtime.go",
+      "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/go-old/runtime.go",
       "kind": "runtime",
-      "sha256": "d38f0fb8e5860c82251d4274306a551fc7cf39f4c3b8c558e49257d5cd78fdcc"
+      "sha256": "770990ade9bdfd0b1e61c0af79bb2cff304081b12dd2c2d37cb9d7de3f83d74f"
     },
     {
-      "path": "src/generated/handshake.go",
+      "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/go-old/handshake.go",
       "kind": "handshake",
-      "sha256": "53ceb1a780c2769633e80614297dd364414882429716bb96a8c456998ffc5d2c"
+      "sha256": "7c5f2ab947f41be8a3d089db2677e3b6d301b4b8f41aebbec9cb3bee4ae46b4c"
     }
   ]
 }

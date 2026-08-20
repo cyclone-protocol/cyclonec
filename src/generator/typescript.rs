@@ -1,57 +1,3 @@
-//! One message → one TypeScript file.
-//!
-//! The TypeScript counterpart of [`super::rust`], [`super::go`] and
-//! [`super::csharp`]. Same rule, same shape: a message is walked once, a
-//! field at a time, and each field appends one statement. Nothing is
-//! analysed on the way: a primitive is a table lookup, and anything else is
-//! another model's name spelled into a call.
-//!
-//! # What it will not write
-//!
-//! No byte layout, no endianness, no string encoding, no length prefix -
-//! those live in [`super::typescript_runtime`], carried verbatim from
-//! RFC-0002. Nor a DTO, a mapper, a registry, or anything else reached by
-//! reflection at runtime: `encode` takes the model class the user wrote and
-//! `decode` writes straight back into one, the same "no intermediate
-//! anything" rule [`super::rust`] and [`super::go`] hold to.
-//!
-//! # Modules, not a shared namespace
-//!
-//! TypeScript has no `use`/`import`-free way to reach another file the way
-//! C#'s fully-qualified names or GDScript's global `class_name` can - every
-//! model, and every nested codec, is reached through an ES `import`, the
-//! same architectural shape [`super::rust`]'s module tree has. See
-//! [`Imports`] for how one is resolved.
-//!
-//! # A nested model field is never left `undefined`
-//!
-//! A Rust struct field or a Go struct field already holds *some* value of
-//! its type before `decode` ever touches it - a nested model is `&mut`
-//! borrowed and decoded in place. A TypeScript class field has no such
-//! guarantee: nothing forces a user's constructor to have set it. So, unlike
-//! those two backends, a bare nested-model field is constructed with `new`
-//! the first time `decode` reaches it if it is not already there (RFC-0002
-//! never asks the generator to invent a value - this is purely so an absent
-//! nested model still has *somewhere* to decode its own absent fields into,
-//! the same reason [`super::csharp`]'s array elements are constructed with
-//! `new` before being decoded into).
-//!
-//! # The decoder, and RFC-0002 §9.1
-//!
-//! Identical policy to every other backend: a bare field asks
-//! `reader.fieldAbsent()` before it reads, taking its zero value when the
-//! stream already ended; array *elements* are read strictly, once the count
-//! says they exist; a nested model is decoded through its own codec
-//! unconditionally, which asks the same question of every one of *its*
-//! fields.
-//!
-//! # A deliberate gap: `Array<Array<T>>`
-//!
-//! Refused with a clear error rather than generated wrong, the same choice
-//! [`super::go`] and [`super::csharp`] make and for the same reason: the
-//! element-type table this generator's whole knowledge of TypeScript types
-//! lives in has no entry for `Array<T>` itself, only for what `T` can be.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::{Field, Message, Model, WireType};
@@ -59,15 +5,7 @@ use crate::model::snake_case;
 
 use super::codec_type_name;
 
-/// The runtime method each primitive maps to, and the TypeScript type it
-/// reads or writes.
-///
-/// This table is the whole of the generator's type knowledge. Every name in
-/// it comes from RFC-0002's Reader/Writer interface, spelled the way
-/// [`super::typescript_runtime`] spells it; a name that is not in it is
-/// another model, and the call is spelled and left for `tsc` to resolve.
 fn primitive(ty: &WireType) -> Option<(&'static str, &'static str, &'static str)> {
-    // (writer method, reader method, TypeScript type)
     Some(match ty {
         WireType::Bool => ("writeBool", "readBool", "boolean"),
         WireType::I8 => ("writeI8", "readI8", "number"),
@@ -76,8 +14,6 @@ fn primitive(ty: &WireType) -> Option<(&'static str, &'static str, &'static str)
         WireType::U16 => ("writeU16", "readU16", "number"),
         WireType::I32 => ("writeI32", "readI32", "number"),
         WireType::U32 => ("writeU32", "readU32", "number"),
-        // Not `number`: a JS `number` is exact only up to 2^53, short of a
-        // full 64-bit range. See `super::typescript_runtime`'s module docs.
         WireType::I64 => ("writeI64", "readI64", "bigint"),
         WireType::U64 => ("writeU64", "readU64", "bigint"),
         WireType::F32 => ("writeF32", "readF32", "number"),
@@ -88,10 +24,6 @@ fn primitive(ty: &WireType) -> Option<(&'static str, &'static str, &'static str)
     })
 }
 
-/// The TypeScript zero-value expression for a field the stream ended before
-/// (RFC-0002 §9.1). Never called for [`WireType::Array`] or
-/// [`WireType::Model`] - an array's absence is handled in `decode_field`, and
-/// a model field has no zero expression of its own; see the module docs.
 fn zero(ty: &WireType) -> &'static str {
     match ty {
         WireType::Bool => "false",
@@ -104,36 +36,22 @@ fn zero(ty: &WireType) -> &'static str {
     }
 }
 
-/// The generated file name: `Player` + `edge` → `player_edge.ts`.
 pub fn file_name(model: &str, codec: &str) -> String {
     format!("{}_{}.ts", snake_case(model), snake_case(codec))
 }
 
-/// The module the generated file's own name resolves to, without its
-/// extension - what a sibling codec file `import`s it by.
 fn module_stem(model: &str, codec: &str) -> String {
     format!("{}_{}", snake_case(model), snake_case(codec))
 }
 
-/// Where one model's own class is declared: the ES module specifier a
-/// generated codec file reaches it by, already relative to `--out` (or a
-/// `--model-path` override) and without a `.ts`/`.js` extension.
 pub struct ModelLocation {
     pub specifier: String,
 }
 
-/// Where every model this run parsed can be reached from inside a generated
-/// TypeScript file.
 pub struct Imports<'a> {
     pub locations: &'a BTreeMap<String, ModelLocation>,
 }
 
-/// Refuses `Array<Array<T>>` before any text is generated - see the module
-/// docs' "deliberate gap".
-///
-/// # Errors
-///
-/// A field whose type nests one `Array` inside another.
 pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     for field in &model.fields {
         if let WireType::Array(element) = &field.ty {
@@ -149,8 +67,6 @@ pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     Ok(())
 }
 
-/// Renders one codec file: the header, its imports, the codec class, its
-/// constants, and its `encode`/`decode`.
 pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> String {
     let mut out = super::Header {
         source: Some(&model.source),
@@ -203,7 +119,6 @@ pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> St
         crate::schema::hex64(message.fingerprint.u64())
     ));
 
-    // -------------------------------------------------------------- encode
     out.push_str(&format!(
         "    /** Writes the `{}` fields of `value`, in declaration order. */\n",
         message.codec
@@ -217,7 +132,6 @@ pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> St
     }
     out.push_str("    }\n\n");
 
-    // -------------------------------------------------------------- decode
     out.push_str(&format!(
         "    /**\n     * Reads the `{}` fields into `value`, in declaration order.\n     *\n",
         message.codec
@@ -242,16 +156,9 @@ pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> St
     out
 }
 
-/// The `import` block at the top of a codec file - exactly what the file
-/// names and nothing else, so a name `tsc` would flag as unused (with
-/// `noUnusedLocals`) is never emitted.
 fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &Imports<'_>) {
-    // Grouped by specifier, so two symbols from one file - a model and its
-    // sibling declared in the same source, or two nested-model codecs that
-    // happen to share a file - become one `import { A, B } from "...";`.
     let mut groups: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
 
-    // The model itself: always needed for `value: Player`.
     if let Some(location) = imports.locations.get(&model.name) {
         groups
             .entry(location.specifier.as_str())
@@ -259,9 +166,6 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
             .insert(model.name.clone());
     }
 
-    // Every model this file constructs with `new` - a bare nested-model
-    // field, or an array of them (see the module docs: unlike Rust/Go, a
-    // nested model here is never assumed to already exist).
     let mut constructed: BTreeSet<&str> = BTreeSet::new();
     for field in &message.fields {
         match &field.ty {
@@ -285,15 +189,11 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
         }
     }
 
-    // The codecs this one calls for its nested models - bare fields and
-    // array elements alike.
     let mut codec_specifiers: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for field in &message.fields {
         let Some(name) = field.ty.model_name() else {
             continue;
         };
-        // A model that references itself is in this very file already, and
-        // a model this run never parsed has no module to import from.
         if name == model.name || !imports.locations.contains_key(name) {
             continue;
         }
@@ -321,8 +221,6 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
     out.push('\n');
 }
 
-// =================================================================== encoding
-
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let place = format!("value.{}", field.name);
 
@@ -339,8 +237,6 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
     encode_scalar(out, &field.ty, &place, codec, "        ");
 }
 
-/// Writes one non-array value - a bare field, or an array element (never an
-/// array itself: `check_no_nested_arrays` has already refused that case).
 fn encode_scalar(out: &mut String, ty: &WireType, place: &str, codec: &str, pad: &str) {
     match primitive(ty) {
         Some((writer_method, ..)) => {
@@ -356,16 +252,9 @@ fn encode_scalar(out: &mut String, ty: &WireType, place: &str, codec: &str, pad:
     }
 }
 
-// =================================================================== decoding
-
 fn decode_field(out: &mut String, field: &Field, codec: &str, imports: &Imports<'_>) {
     let place = format!("value.{}", field.name);
 
-    // A nested model needs no absence check of its own: its codec asks the
-    // same question of every one of its fields, so an absent nested model
-    // zeroes them all without reading a byte. It does need *somewhere* to
-    // decode into - see the module docs for why a missing one is constructed
-    // here rather than assumed.
     if let Some(name) = as_model(&field.ty) {
         let nested = codec_type_name(name, codec);
         out.push_str(&format!(
@@ -401,9 +290,6 @@ fn decode_field(out: &mut String, field: &Field, codec: &str, imports: &Imports<
     ));
 }
 
-/// Decodes one array element - strictly, unlike a field: the count already
-/// promised this element exists, so a stream that ends here is truncated,
-/// not skewed - and pushes it onto `list`.
 fn decode_element_into(out: &mut String, ty: &WireType, list: &str, codec: &str, pad: &str) {
     match as_model(ty) {
         Some(name) => {
@@ -419,10 +305,6 @@ fn decode_element_into(out: &mut String, ty: &WireType, list: &str, codec: &str,
     }
 }
 
-/// `T`'s TypeScript type name for `Array<T>`'s `T[]` local - the primitive
-/// table's own spelling, or a bare model reference (already imported by
-/// `write_imports` whenever this array is spelled, since `spelled_types`
-/// collects exactly this case).
 fn element_type_name(ty: &WireType, _imports: &Imports<'_>) -> String {
     match primitive(ty) {
         Some((_, _, ts_type)) => ts_type.to_owned(),
@@ -433,9 +315,6 @@ fn element_type_name(ty: &WireType, _imports: &Imports<'_>) -> String {
     }
 }
 
-/// The model name of a bare model type - `Array<T>` is not one, because an
-/// array is decoded element by element and only *its elements* may be
-/// models.
 fn as_model(ty: &WireType) -> Option<&str> {
     match ty {
         WireType::Model(name) => Some(name),
@@ -655,8 +534,6 @@ mod tests {
 
     #[test]
     fn a_bare_nested_model_imports_its_codec_and_its_type() {
-        // Unlike Rust/Go, the type itself is imported too - it is
-        // constructed with `new` when the field arrives absent.
         let text = generated(&[("Info", "PlayerInfo")]);
         assert!(
             text.contains("import { Player, PlayerInfo } from \"../src/models/player\";\n"),

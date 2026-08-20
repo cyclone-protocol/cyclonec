@@ -1,40 +1,9 @@
-//! The Cyclone IR - the source of truth for one run.
-//!
-//! ```text
-//! Source Model
-//!       ↓
-//! Scanner / Parser            crate::parser  →  crate::model
-//!       ↓
-//! Cyclone IR                  this module
-//!       ├──────────────→ generated codec
-//!       ├──────────────→ schema.json
-//!       ├──────────────→ fingerprints
-//!       └──────────────→ build-graph
-//! ```
-//!
-//! Everything a run produces is derived from here and from nothing else. In
-//! particular an existing `.cyclone/schema.json` is **never** read to decide
-//! what to generate: it is an artifact of a previous IR, useful for comparing
-//! against, and re-deriving the current schema from source on every run is what
-//! makes the comparison mean anything.
-//!
-//! The IR is where a schema stops being source text and becomes a schema: a
-//! `network_type` string becomes a [`WireType`], a model plus a codec becomes a
-//! [`Message`] (the thing that actually goes on the wire, and the thing a
-//! fingerprint identifies), and the whole set is checked before a single byte
-//! of output is written.
-
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::fingerprint::{self, Fingerprint};
 use crate::model;
 
-/// A Cyclone type, as it appears on the wire.
-///
-/// The scanner captures `#[network(TYPE)]` as an opaque string; this is where
-/// that string is resolved, once, so nothing downstream has to parse type
-/// syntax again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireType {
     Bool,
@@ -48,24 +17,13 @@ pub enum WireType {
     U64,
     F32,
     F64,
-    /// A `u32` byte length, then that many UTF-8 bytes (RFC-0002 §3).
     Str,
-    /// A `u32` byte length, then that many raw bytes (RFC-0002 §4).
     Bytes,
-    /// A `u32` element count, then that many elements (RFC-0002 §6).
     Array(Box<WireType>),
-    /// Another model's fields, inline (RFC-0002 §5). The name may belong to a
-    /// model this run parsed or to one it never saw - resolution is the host
-    /// compiler's, same as ever.
     Model(String),
 }
 
 impl WireType {
-    /// Resolves the string a `#[network(...)]` annotation spelled.
-    ///
-    /// # Errors
-    ///
-    /// A malformed composite: `Array<`, `Array<>`, an empty type.
     pub fn parse(text: &str) -> Result<WireType, String> {
         let text = text.trim();
         if text.is_empty() {
@@ -82,8 +40,6 @@ impl WireType {
             return Ok(WireType::Array(Box::new(WireType::parse(inner)?)));
         }
 
-        // A stray `<` or `>` anywhere else is not a Cyclone type at all; only
-        // `Array<T>` is composite (RFC-0002 §6).
         if text.contains('<') || text.contains('>') {
             return Err(format!("`{text}` is not a Cyclone type"));
         }
@@ -106,8 +62,6 @@ impl WireType {
         })
     }
 
-    /// The Specification's own spelling of the type, as written in
-    /// `schema.json` and hashed into a fingerprint.
     pub fn spelling(&self) -> String {
         match self {
             WireType::Bool => "bool".to_owned(),
@@ -128,8 +82,6 @@ impl WireType {
         }
     }
 
-    /// The model name this type reaches, if any: `PlayerInfo` and
-    /// `Array<PlayerInfo>` both reach `PlayerInfo`.
     pub fn model_name(&self) -> Option<&str> {
         match self {
             WireType::Model(name) => Some(name),
@@ -139,68 +91,34 @@ impl WireType {
     }
 }
 
-/// A field of a model, resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
     pub name: String,
     pub ty: WireType,
-    /// The codecs this field belongs to, in the order written.
     pub codecs: Vec<String>,
 }
 
-/// One wire contract: a model rendered by one codec.
-///
-/// This - not the model - is what a peer encodes, decodes, and fingerprints.
-/// A model with three codecs is three messages, each carrying its own subset of
-/// fields in declaration order, and each with its own fingerprint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
-    /// The model this message renders.
     pub model: String,
-    /// The codec it renders it by.
     pub codec: String,
-    /// `Model.codec` - the message's identity, and the key everything else
-    /// uses to find it.
     pub name: String,
-    /// A stable 32-bit id derived from [`Message::name`] alone.
-    ///
-    /// Deliberately *not* derived from the fingerprint: an id names a message,
-    /// a fingerprint describes its current layout, and an id that changed
-    /// whenever a field was appended could not be used to look the message up.
     pub id: u32,
-    /// The fingerprint of this message's wire contract.
     pub fingerprint: Fingerprint,
-    /// The fields this codec carries, in declaration order.
-    ///
-    /// Their [`Field::codecs`] is always empty: the message already is one
-    /// codec, and a field inside it has nothing further to belong to.
     pub fields: Vec<Field>,
 }
 
-/// A model, resolved.
 #[derive(Debug, Clone)]
 pub struct Model {
     pub name: String,
-    /// The file it was read from, as given on the command line, with `/`
-    /// separators so a schema written on Windows and one written on Linux
-    /// compare equal.
     pub source: String,
-    /// The codecs the model declares, in declaration order.
     pub codecs: Vec<String>,
-    /// Every annotated field, in declaration order, whether or not it joined a
-    /// codec.
     pub fields: Vec<Field>,
-    /// The fingerprint of the model's whole declaration.
-    ///
-    /// Not a wire contract - see [`Message::fingerprint`] for that - but the
-    /// thing a human means by "did `Player` change?".
     pub fingerprint: Fingerprint,
-    /// One message per declared codec, in declaration order.
     pub messages: Vec<Message>,
 }
 
 impl Model {
-    /// The fields belonging to `codec`, in declaration order.
     pub fn fields_in<'a>(&'a self, codec: &'a str) -> impl Iterator<Item = &'a Field> {
         self.fields
             .iter()
@@ -208,50 +126,29 @@ impl Model {
     }
 }
 
-/// Every model of one run, checked, resolved and fingerprinted.
 #[derive(Debug, Clone)]
 pub struct Schema {
-    /// The `schema.json` format version.
     pub schema_version: u32,
-    /// `cyclonec <version>` - the generator that produced this.
     pub generator: String,
-    /// The fingerprint of the whole schema: every message, in name order.
     pub fingerprint: Fingerprint,
-    /// Models, sorted by name so that file discovery order cannot change the
-    /// output.
     pub models: Vec<Model>,
 }
 
-/// The `schema.json` format version this generator reads and writes.
 pub const SCHEMA_VERSION: u32 = 1;
 
 impl Schema {
-    /// The model called `name`.
     pub fn model(&self, name: &str) -> Option<&Model> {
         self.models.iter().find(|model| model.name == name)
     }
 
-    /// Every message of every model, in model then codec declaration order.
     pub fn messages(&self) -> impl Iterator<Item = &Message> {
         self.models.iter().flat_map(|model| model.messages.iter())
     }
 
-    /// The message called `Model.codec`.
     pub fn message(&self, name: &str) -> Option<&Message> {
         self.messages().find(|message| message.name == name)
     }
 
-    /// Builds the IR from what the scanner collected.
-    ///
-    /// This is the one place a schema is validated: every check that needs to
-    /// see more than one field, or more than one model, happens here, before
-    /// anything is generated.
-    ///
-    /// # Errors
-    ///
-    /// A malformed network type, a duplicate model name, a nested field routed
-    /// into a codec the referenced model does not declare, or two messages
-    /// whose ids collide.
     pub fn build(parsed: &[model::Model]) -> Result<Schema, String> {
         let mut models: Vec<Model> = Vec::with_capacity(parsed.len());
 
@@ -288,9 +185,6 @@ impl Schema {
                 source: slashed(&source_model.source),
                 codecs: source_model.codecs.clone(),
                 fields,
-                // Filled in below, once every model is present: a fingerprint
-                // expands the models a field references, so it cannot be
-                // computed while the set is still incomplete.
                 fingerprint: Fingerprint::ZERO,
                 messages: Vec::new(),
             });
@@ -302,7 +196,6 @@ impl Schema {
         check_duplicate_fields(&models)?;
         check_canonical_field_names(&models)?;
 
-        // ------------------------------------------------- fingerprints
         let resolved = models.clone();
         for model in &mut models {
             model.fingerprint = fingerprint::model(model, &resolved);
@@ -316,11 +209,6 @@ impl Schema {
                         codec: codec.clone(),
                         id: fingerprint::message_id(&name),
                         fingerprint: fingerprint::message(model, codec, &resolved),
-                        // A message *is* one codec, so its fields carry no
-                        // codec list of their own: there is nothing left for
-                        // one to say. `schema.json` writes them the same way,
-                        // which is what lets a schema read back from disk
-                        // compare equal to the one that wrote it.
                         fields: model
                             .fields_in(codec)
                             .map(|field| Field {
@@ -348,29 +236,14 @@ impl Schema {
     }
 }
 
-/// `cyclonec <version>`, as written into every artifact.
 pub fn generator_name() -> String {
     format!("cyclonec {}", env!("CARGO_PKG_VERSION"))
 }
 
-/// A path as a schema writes it: `/` separators, whatever the host uses.
 fn slashed(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-/// Checks that every nested-model field routes only into codecs the
-/// *referenced* model actually declares.
-///
-/// A field whose Cyclone type names another model carries its own codec list
-/// over to the nested call: routing `Player.info` into `edge` means the
-/// generated `PlayerEdgeCodec` calls `PlayerInfoEdgeCodec`. If `PlayerInfo`
-/// itself never declared an `edge` codec, that call names a type nothing will
-/// ever generate.
-///
-/// A type this run never parsed at all (a hand-written codec, a type from
-/// another crate) is left for the host compiler to resolve or reject, exactly
-/// as before - only a model we *did* parse has already told us which codecs it
-/// has.
 fn check_nested_codecs(models: &[Model]) -> Result<(), String> {
     for model in models {
         for codec in &model.codecs {
@@ -407,10 +280,6 @@ fn check_nested_codecs(models: &[Model]) -> Result<(), String> {
     Ok(())
 }
 
-/// Two fields of one model may not share a name.
-///
-/// The scanner would happily collect both; the generated code would not
-/// compile, and the schema would describe something no source can mean.
 fn check_duplicate_fields(models: &[Model]) -> Result<(), String> {
     for model in models {
         for (index, field) in model.fields.iter().enumerate() {
@@ -428,18 +297,6 @@ fn check_duplicate_fields(models: &[Model]) -> Result<(), String> {
     Ok(())
 }
 
-/// Two fields of one message may not share both a canonical name and a type.
-///
-/// A message's canonical text is a list of `field <index> <name> <type>` lines
-/// (SPEC-FINGERPRINT.md §3.2.1), so swapping two of them changes the text -
-/// and therefore the fingerprint - unless both the name and the type match.
-/// `ID: u32` beside `Id: u32`, which Go and C# both accept, is that case:
-/// reordering the two would be invisible to a handshake, so the schema is
-/// refused rather than hashed over.
-///
-/// Scoped to one codec, because that is the scope a fingerprint has. Two
-/// fields that collide but never share a message cannot mask each other, and
-/// refusing them would only reject a schema that is safe.
 fn check_canonical_field_names(models: &[Model]) -> Result<(), String> {
     for model in models {
         for codec in &model.codecs {
@@ -463,12 +320,6 @@ fn check_canonical_field_names(models: &[Model]) -> Result<(), String> {
     Ok(())
 }
 
-/// Two messages may not share an id.
-///
-/// A [`Message::id`] is 32 bits of a hash of the message name, so a collision
-/// takes a deliberate effort to arrange - but a collision would make two
-/// different wire contracts indistinguishable at handshake, so it is reported
-/// rather than hoped against.
 fn check_message_ids(models: &[Model]) -> Result<(), String> {
     let mut seen: BTreeMap<u32, &str> = BTreeMap::new();
 
@@ -624,9 +475,6 @@ mod tests {
         assert!(error.contains("twice"), "{error}");
     }
 
-    /// `ID: u32` beside `Id: u32` is legal Go and legal C#, and the canonical
-    /// text spells both `field <i> id u32`. Reordering the two would leave the
-    /// fingerprint alone, so the schema is refused instead of hashed over.
     #[test]
     fn two_fields_a_fingerprint_could_not_tell_apart_are_an_error() {
         let error = Schema::build(&[model(
@@ -650,9 +498,6 @@ mod tests {
         assert!(also.contains("both 'playerid' of type u32"), "{also}");
     }
 
-    /// The same names with different types are safe: a swap changes the type
-    /// on both lines, so the fingerprint moves. Refusing this would reject a
-    /// schema no handshake can be fooled by.
     #[test]
     fn a_shared_canonical_name_with_different_types_is_allowed() {
         let schema = Schema::build(&[model(
@@ -676,8 +521,6 @@ mod tests {
         );
     }
 
-    /// Scoped to one codec: two fields that collide but never share a message
-    /// cannot mask each other, and a field in no codec shares none at all.
     #[test]
     fn a_collision_across_codecs_is_not_a_collision() {
         Schema::build(&[model(

@@ -1,37 +1,3 @@
-//! One message → one Go file.
-//!
-//! The Go counterpart of [`super::rust`]. Same rule, same shape: a message is
-//! walked once, a field at a time, and each field appends one statement.
-//! Nothing is analysed on the way: a primitive is a table lookup, and
-//! anything else is another model's name spelled into a call.
-//!
-//! # What Go forces that Rust does not
-//!
-//! Go has no exceptions, so `Decode` returns `error` and every read is
-//! followed by an explicit check. And Go compiles by *package*, not by file:
-//! every generated file shares one `package` clause with its siblings, so
-//! (unlike [`super::rust`], where each codec is its own module) codecs never
-//! import one another - only the model types they name need an `import`, and
-//! only when that model's package differs from the generated one.
-//!
-//! # The decoder, and RFC-0002 §9.1
-//!
-//! Identical policy to [`super::rust`]: a bare field asks `r.FieldAbsent()`
-//! before it reads, taking its zero value when the stream already ended;
-//! array *elements* are read strictly, once the count says they exist; a
-//! nested model is decoded through its own codec unconditionally, which asks
-//! the same question of every one of *its* fields.
-//!
-//! # A known gap
-//!
-//! `Array<Array<T>>` is refused with a clear error rather than generated
-//! wrong. `cyclonec_old`'s Go backend never handled it correctly either (it
-//! quietly emitted a call to a codec named after the inner `Array<...>`
-//! spelling, which cannot exist) - this backend reports it instead of
-//! reproducing that bug. Nesting one array inside another is rare enough in
-//! practice that refusing it outright, clearly, was judged better than the
-//! extra generator complexity a correct implementation would need.
-
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -40,10 +6,6 @@ use crate::model::snake_case;
 
 use super::codec_type_name;
 
-/// The Go package name every generated file in one run shares, derived from
-/// `--out`'s own directory name - the same convention virtually every Go code
-/// generator follows, so that `go/generated/` reads as `package generated`
-/// without anyone having to say so twice.
 pub fn package_name_from_out(out: &Path) -> String {
     let basename = out
         .file_name()
@@ -52,11 +14,6 @@ pub fn package_name_from_out(out: &Path) -> String {
     sanitize_package_name(basename)
 }
 
-/// Go identifiers are ASCII letters, digits and `_`, may not start with a
-/// digit, and may not be a keyword; a package name conventionally avoids
-/// underscores too. `--out`'s basename rarely needs any of this, but a
-/// generator that trusts a directory name unchecked is a generator that picks
-/// today to find out `--out 2fast` does not compile.
 fn sanitize_package_name(text: &str) -> String {
     let mut out: String = text
         .chars()
@@ -104,14 +61,7 @@ const GO_KEYWORDS: &[&str] = &[
     "var",
 ];
 
-/// The runtime method each primitive maps to, and its Go spelling.
-///
-/// This table is the whole of the generator's type knowledge. Every name in
-/// it comes from RFC-0002's Reader / Writer interface, spelled the way
-/// [`super::go_runtime`] spells it; a name that is not in it is another
-/// model, and the call is spelled and left for the Go compiler to resolve.
 fn primitive(ty: &WireType) -> Option<(&'static str, &'static str, &'static str)> {
-    // (writer method, reader method, Go type)
     Some(match ty {
         WireType::Bool => ("WriteBool", "ReadBool", "bool"),
         WireType::I8 => ("WriteI8", "ReadI8", "int8"),
@@ -130,10 +80,6 @@ fn primitive(ty: &WireType) -> Option<(&'static str, &'static str, &'static str)
     })
 }
 
-/// The Go zero-value expression for a field the stream ended before
-/// (RFC-0002 §9.1). Never called for [`WireType::Model`] - a nested model has
-/// no zero expression of its own; it is decoded through its own codec, which
-/// zeroes its fields by asking the same question of each of them.
 fn zero(ty: &WireType) -> &'static str {
     match ty {
         WireType::Bool => "false",
@@ -144,56 +90,30 @@ fn zero(ty: &WireType) -> &'static str {
     }
 }
 
-/// The generated file name: `Player` + `edge` → `player_edge.go`.
 pub fn file_name(model: &str, codec: &str) -> String {
     format!("{}_{}.go", snake_case(model), snake_case(codec))
 }
 
-/// Where one model's type is declared, in Go's own terms.
 pub struct ModelLocation {
-    /// The import path of the package the model's source lives in, e.g.
-    /// `github.com/acme/game/internal/models`.
     pub import_path: String,
-    /// The name that package declares in its own `package` clause - not
-    /// necessarily the last segment of `import_path`, which is why this is
-    /// read from source rather than derived from the path.
     pub package: String,
 }
 
-/// Where every model this run parsed can be reached from inside a generated
-/// Go file.
 pub struct Imports<'a> {
     pub locations: &'a std::collections::BTreeMap<String, ModelLocation>,
-    /// The import path the generated package itself resolves to. A model
-    /// whose own import path is equal to this one is declared *in* the
-    /// generated package - referencing it through an `import` would be a
-    /// self-import, which Go refuses to compile, so it is spelled bare
-    /// instead.
     pub own_import_path: &'a str,
 }
 
 impl Imports<'_> {
-    /// How a model's type is spelled in generated code: bare if it is
-    /// colocated with the generated package, package-qualified otherwise.
     fn qualify(&self, model: &str) -> String {
         match self.locations.get(model) {
             Some(location) if location.import_path == self.own_import_path => model.to_owned(),
             Some(location) => format!("{}.{model}", location.package),
-            // A model this run never parsed (a hand-written type, one from
-            // another package `cyclonec` was not pointed at): left for the Go
-            // compiler to resolve, spelled bare - the same "leave it to the
-            // host compiler" policy `super::rust` applies.
             None => model.to_owned(),
         }
     }
 }
 
-/// Refuses `Array<Array<T>>` before any text is generated - see the module
-/// docs' "known gap".
-///
-/// # Errors
-///
-/// A field whose type nests one `Array` inside another.
 pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     for field in &model.fields {
         if let WireType::Array(element) = &field.ty {
@@ -209,8 +129,6 @@ pub fn check_no_nested_arrays(model: &Model) -> Result<(), String> {
     Ok(())
 }
 
-/// Renders one codec file: the header, the package clause, its imports, the
-/// codec type, its constants, and its `Encode` / `Decode`.
 pub fn codec_file(
     model: &Model,
     message: &Message,
@@ -266,7 +184,6 @@ pub fn codec_file(
         message.fingerprint.u64()
     ));
 
-    // -------------------------------------------------------------- encode
     out.push_str(&format!(
         "// Encode writes the {:?} fields of value, in declaration order.\n",
         message.codec
@@ -279,7 +196,6 @@ pub fn codec_file(
     }
     out.push_str("}\n\n");
 
-    // -------------------------------------------------------------- decode
     out.push_str(&format!(
         "// Decode reads the {:?} fields into value, in declaration order.\n",
         message.codec
@@ -310,9 +226,6 @@ pub fn codec_file(
     out
 }
 
-/// The `import` block at the top of a codec file - exactly what the file
-/// names and nothing else, so a package Go would refuse to compile (an
-/// unused import is an error, not a warning) is never emitted.
 fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &Imports<'_>) {
     let mut spelled: BTreeSet<&str> = BTreeSet::new();
     spelled.insert(&model.name);
@@ -339,8 +252,6 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
     out.push_str(")\n\n");
 }
 
-// =================================================================== encoding
-
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let place = format!("value.{}", field.name);
 
@@ -355,8 +266,6 @@ fn encode_field(out: &mut String, field: &Field, codec: &str) {
     encode_scalar(out, &field.ty, &place, codec, "\t");
 }
 
-/// Writes one non-array value - a bare field, or an array element (never an
-/// array itself: `check_no_nested_arrays` has already refused that case).
 fn encode_scalar(out: &mut String, ty: &WireType, place: &str, codec: &str, pad: &str) {
     match primitive(ty) {
         Some((writer_method, ..)) => {
@@ -372,14 +281,9 @@ fn encode_scalar(out: &mut String, ty: &WireType, place: &str, codec: &str, pad:
     }
 }
 
-// =================================================================== decoding
-
 fn decode_field(out: &mut String, field: &Field, codec: &str, imports: &Imports<'_>) {
     let place = format!("value.{}", field.name);
 
-    // A nested model needs no absence check of its own: its codec asks the
-    // same question of every one of its fields, so an absent nested model
-    // zeroes them all without reading a byte.
     if let Some(name) = as_model(&field.ty) {
         let nested = codec_type_name(name, codec);
         out.push_str(&format!("\terr = ({nested}{{}}).Decode(r, &{place})\n"));
@@ -420,9 +324,6 @@ fn decode_field(out: &mut String, field: &Field, codec: &str, imports: &Imports<
     out.push_str("\t}\n");
 }
 
-/// Declares and reads `var {var} {type}`, strictly - no absence check, since
-/// an array element is only ever read because the count already promised it
-/// exists (a stream that ends here is truncated, not skewed).
 fn decode_scalar(
     out: &mut String,
     ty: &WireType,
@@ -452,8 +353,6 @@ fn decode_scalar(
     }
 }
 
-/// The Go type name of an array element - the primitive table's own spelling,
-/// or a qualified model reference.
 fn element_type_name(ty: &WireType, imports: &Imports<'_>) -> String {
     match primitive(ty) {
         Some((_, _, go_type)) => go_type.to_owned(),
@@ -461,9 +360,6 @@ fn element_type_name(ty: &WireType, imports: &Imports<'_>) -> String {
     }
 }
 
-/// The model name of a bare model type - `Array<T>` is not one, because an
-/// array is decoded element by element and only *its elements* may be
-/// models.
 fn as_model(ty: &WireType) -> Option<&str> {
     match ty {
         WireType::Model(name) => Some(name),
@@ -471,9 +367,6 @@ fn as_model(ty: &WireType) -> Option<&str> {
     }
 }
 
-/// A local variable name that cannot collide with `w`, `r`, `value`, `err`, or
-/// another field's own locals in the same method: the field name with its
-/// first character lower-cased.
 fn local_name(field_name: &str) -> String {
     let mut chars = field_name.chars();
     let mut local = match chars.next() {
@@ -595,7 +488,6 @@ mod tests {
             text.contains("(PlayerInfoEdgeCodec{}).Decode(r, &value.Info)"),
             "{text}"
         );
-        // Same package: no import for the nested codec's own type.
         assert!(!text.contains("PlayerInfoEdgeCodec\""), "{text}");
     }
 

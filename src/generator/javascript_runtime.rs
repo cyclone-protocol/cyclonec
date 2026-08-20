@@ -1,21 +1,3 @@
-//! The Cyclone runtime, carried verbatim into `runtime.js`.
-//!
-//! The JavaScript counterpart of [`super::typescript_runtime`] - the same
-//! block, with every type annotation erased and TypeScript-only syntax
-//! (`interface`, visibility modifiers) replaced by its plain-JavaScript
-//! equivalent (`#private` class fields, JSDoc `@param`/`@returns` comments
-//! for a reader that wants the types without a compiler). See
-//! [`super::typescript_runtime`]'s module docs for why `DataView` and
-//! `bigint` are used at all - every word of that reasoning applies here
-//! unchanged, because this **is** that reasoning, generating plain
-//! JavaScript instead of TypeScript.
-//!
-//! Kept a byte-for-byte identical wire format on purpose: the brief requires
-//! it, and it is checked by generating both from the same schema and
-//! comparing what they encode - see `tests/cli.rs`'s
-//! `typescript_and_javascript_backends_agree_on_the_wire_format`.
-
-/// The runtime block, emitted once, into its own file.
 pub const RUNTIME: &str = r####"
 // ==========================================================================
 // Cyclone runtime - RFC-0002, carried verbatim.

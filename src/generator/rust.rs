@@ -1,59 +1,7 @@
-//! One message → one Rust file.
-//!
-//! There is no pass here. A message is walked once, a field at a time, and each
-//! field appends one statement. Nothing is analysed on the way: a primitive is
-//! a table lookup, and anything else is another model's name spelled into a
-//! call.
-//!
-//! # What it will not write
-//!
-//! No byte layout, no endianness, no string encoding, no length prefix. Those
-//! live in [`super::rust_runtime`], already implemented against RFC-0002, and
-//! re-deriving them per model - or per language - is how two implementations of
-//! one wire format start disagreeing.
-//!
-//! Nor a DTO, a mapper, a registry, an `encoded_size`, or anything else reached
-//! by reflection at runtime. `encode` takes `&Player` and `decode` takes
-//! `&mut Player`: the model the user declared, written and read in place.
-//!
-//! # The decoder, and RFC-0002 §9.1
-//!
-//! Every field is preceded by one question - is this field *absent*, or is it
-//! *here*?
-//!
-//! ```ignore
-//! value.level = if reader.field_absent() { 0u32 } else { reader.read_u32()? };
-//! ```
-//!
-//! `field_absent()` is true only at a field boundary with nothing left, which
-//! is exactly the case §9.1 calls valid: an older writer stopped there. The
-//! field takes its zero value and, because no read happens, so does every field
-//! after it - the check costs one comparison per field and needs no flag, no
-//! early return, and no second code path.
-//!
-//! A field that *starts* and runs out mid-way is the other case entirely:
-//! `field_absent()` is false, the read runs, and the read fails with
-//! `UnexpectedEof`. A truncated `u32` is a corrupt packet, and it must never be
-//! mistaken for a zero.
-//!
-//! Trailing bytes need no code at all: the decoder reads the fields it knows
-//! and returns, leaving whatever a newer writer appended unread.
-//!
-//! Array **elements** are read strictly, with no absence check. A count of 3
-//! promises three elements; a stream that ends after two is not version skew,
-//! it is a truncated array.
-
 use crate::ir::{Field, Message, Model, WireType};
 use crate::model::snake_case;
 
-/// The runtime method each primitive maps to, and whether the writer takes it
-/// by reference.
-///
-/// This table is the whole of the generator's type knowledge. Every name in it
-/// comes from RFC-0002's Reader / Writer interface; a name that is not in it is
-/// another model, and the call is spelled and left for `rustc` to resolve.
 fn primitive(ty: &WireType) -> Option<(&'static str, &'static str, bool)> {
-    // (writer method, reader method, passed by reference)
     Some(match ty {
         WireType::Bool => ("write_bool", "read_bool", false),
         WireType::I8 => ("write_i8", "read_i8", false),
@@ -72,7 +20,6 @@ fn primitive(ty: &WireType) -> Option<(&'static str, &'static str, bool)> {
     })
 }
 
-/// The value a field takes when the stream ended before it (RFC-0002 §9.1).
 fn zero(ty: &WireType) -> String {
     match ty {
         WireType::Bool => "false".to_owned(),
@@ -85,43 +32,21 @@ fn zero(ty: &WireType) -> String {
     }
 }
 
-/// The generated type name: `Player` + `edge` → `PlayerEdgeCodec`.
 pub use super::codec_type_name;
 
-/// The generated module name: `Player` + `edge` → `player_edge`.
-///
-/// A plain Rust identifier, because the file is a plain Rust module. A name
-/// like `player.edge.rs` cannot be reached by `mod` at all - the dot is not
-/// part of an identifier - and that is the only way a user has of getting at
-/// it.
 pub fn module_name(model: &str, codec: &str) -> String {
     format!("{}_{}", snake_case(model), snake_case(codec))
 }
 
-/// The generated file name: `Player` + `edge` → `player_edge.rs`.
 pub fn file_name(model: &str, codec: &str) -> String {
     format!("{}.rs", module_name(model, codec))
 }
 
-/// Where the types a generated codec file names actually live.
-///
-/// A codec file is a module, so every type it mentions has to be imported: the
-/// model it encodes, the models its fields reach, and the codecs it calls for
-/// them. Nothing can be assumed to be "in scope already" the way it could when
-/// the whole output was one file pasted into the user's own module.
 pub struct Imports<'a> {
-    /// The full path of each model's type - `crate::models::player::Player`.
-    ///
-    /// A model that is not in here is one this run never parsed; no `use` is
-    /// written for it and resolving it stays the host compiler's job, as ever.
     pub types: &'a std::collections::BTreeMap<String, String>,
-    /// How many `super::`s reach the generated tree's root from this file.
-    /// One, while the tree is flat.
     pub root: &'a str,
 }
 
-/// Renders one codec file: the header, its imports, the codec type, its
-/// constants, and its `encode` / `decode`.
 pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> String {
     let mut out = super::Header {
         source: Some(&model.source),
@@ -176,7 +101,6 @@ pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> St
         message.fingerprint.u64()
     ));
 
-    // -------------------------------------------------------------- encode
     let unused = if message.fields.is_empty() { "_" } else { "" };
     out.push_str(&format!(
         "    /// Writes the `{}` fields of `value`, in declaration order.\n",
@@ -191,7 +115,6 @@ pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> St
     }
     out.push_str("    }\n\n");
 
-    // -------------------------------------------------------------- decode
     out.push_str(&format!(
         "    /// Reads the `{}` fields into `value`, in declaration order.\n",
         message.codec
@@ -218,11 +141,6 @@ pub fn codec_file(model: &Model, message: &Message, imports: &Imports<'_>) -> St
     out
 }
 
-/// The `use` block at the top of a codec file.
-///
-/// Exactly what the file names and nothing else - an import Rust would warn
-/// about is an import a user has to silence, in generated code they cannot
-/// edit.
 fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &Imports<'_>) {
     use std::collections::BTreeSet;
 
@@ -231,9 +149,6 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
         "use {root}::runtime::{{DecodeError, Reader, Writer}};\n"
     ));
 
-    // The model this codec reads and writes, plus every model whose *type* the
-    // generated code spells out - which is array elements, and only those: a
-    // bare nested model is reached through its codec, never by name.
     let mut spelled: BTreeSet<&str> = BTreeSet::new();
     spelled.insert(&model.name);
     for field in &message.fields {
@@ -246,14 +161,11 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
         }
     }
 
-    // The codecs this one calls for its nested models.
     let mut codecs: BTreeSet<String> = BTreeSet::new();
     for field in &message.fields {
         let Some(name) = field.ty.model_name() else {
             continue;
         };
-        // A model that references itself is in this very file already, and a
-        // model this run never parsed has no module to import from.
         if name == model.name || !imports.types.contains_key(name) {
             continue;
         }
@@ -270,19 +182,11 @@ fn write_imports(out: &mut String, model: &Model, message: &Message, imports: &I
     out.push('\n');
 }
 
-// =================================================================== encoding
-
 fn encode_field(out: &mut String, field: &Field, codec: &str) {
     let place = format!("value.{}", field.name);
     encode_value(out, &field.ty, &place, false, codec, 2, 0);
 }
 
-/// Writes one value - a field, or an array element.
-///
-/// `place` is the expression naming it and `borrowed` says whether that
-/// expression is already a reference (an array's loop variable is; a field of
-/// `value` is not). `indent` is the current depth in four-space units, and
-/// `depth` keeps the loop variables of nested arrays apart.
 fn encode_value(
     out: &mut String,
     ty: &WireType,
@@ -314,17 +218,12 @@ fn encode_value(
     match primitive(ty) {
         Some((writer_method, _, by_reference)) => {
             let argument = match (by_reference, borrowed) {
-                // `string` and `bytes` are written by reference; the rest by
-                // value. Either way the argument has to arrive in that shape,
-                // whichever shape `place` is already in.
                 (true, false) => format!("&{place}"),
                 (false, true) => format!("*{place}"),
                 _ => place.to_owned(),
             };
             out.push_str(&format!("{pad}writer.{writer_method}({argument});\n"));
         }
-        // A model. The codec carries over, so a nested model is written by the
-        // same profile the outer one is being written by.
         None => {
             let nested = codec_type_name(
                 ty.model_name().expect("a non-primitive, non-array type"),
@@ -340,14 +239,9 @@ fn encode_value(
     }
 }
 
-// =================================================================== decoding
-
 fn decode_field(out: &mut String, field: &Field, codec: &str) {
     let place = format!("value.{}", field.name);
 
-    // A nested model needs no absence check of its own: its codec asks the
-    // same question of every one of its fields, so an absent nested model
-    // zeroes them all without reading a byte.
     if let Some(name) = as_model(&field.ty) {
         let nested = codec_type_name(name, codec);
         out.push_str(&format!(
@@ -357,8 +251,6 @@ fn decode_field(out: &mut String, field: &Field, codec: &str) {
     }
 
     if let WireType::Array(element_type) = &field.ty {
-        // A block, so that two array fields in one codec cannot collide over
-        // the names below.
         out.push_str("        {\n");
         out.push_str(
             "            let count = if reader.field_absent() { 0 } \
@@ -385,10 +277,6 @@ fn decode_field(out: &mut String, field: &Field, codec: &str) {
     ));
 }
 
-/// An expression producing one decoded array element.
-///
-/// Strict, unlike a field: inside an array the count already promised this
-/// element exists, so a stream that ends here is truncated, not skewed.
 fn decode_element(ty: &WireType, codec: &str) -> String {
     if let Some(name) = as_model(ty) {
         let nested = codec_type_name(name, codec);
@@ -411,8 +299,6 @@ fn decode_element(ty: &WireType, codec: &str) -> String {
     format!("reader.{reader_method}()?")
 }
 
-/// The model name of a bare model type - `Array<T>` is not one, because an
-/// array is decoded element by element and only *its elements* may be models.
 fn as_model(ty: &WireType) -> Option<&str> {
     match ty {
         WireType::Model(name) => Some(name),
@@ -548,7 +434,6 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("writer.write_string(element);"), "{text}");
-        // The count is absence-checked; the elements are not.
         assert!(
             text.contains(
                 "let count = if reader.field_absent() { 0 } else { reader.read_array_count()? };"
@@ -609,8 +494,6 @@ mod tests {
         assert!(text.contains("pub const FINGERPRINT: u64 = 0x"), "{text}");
     }
 
-    /// A generated file is a module, so it is named like one and imports what
-    /// it names.
     #[test]
     fn a_codec_file_is_a_module_that_imports_what_it_names() {
         assert_eq!(file_name("Player", "edge"), "player_edge.rs");
@@ -628,8 +511,6 @@ mod tests {
             text.contains("use crate::models::player::Player;\n"),
             "{text}"
         );
-        // The element type is constructed by name in the array loop, so it is
-        // imported; the codec is called for both fields, so it is too.
         assert!(
             text.contains("use crate::models::player::PlayerInfo;\n"),
             "{text}"
@@ -640,7 +521,6 @@ mod tests {
         );
     }
 
-    /// An import Rust would warn about is an import the user cannot remove.
     #[test]
     fn a_bare_nested_model_imports_its_codec_and_not_its_type() {
         let text = generated(&[("info", "PlayerInfo")]);

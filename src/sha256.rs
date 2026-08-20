@@ -1,13 +1,3 @@
-//! SHA-256 (FIPS 180-4), written out here rather than depended on.
-//!
-//! The fingerprint algorithm ([`crate::fingerprint`]) has to give the same
-//! answer in Rust, Go, C#, C++ and every future SDK, forever. A dependency is a
-//! thing with a version, and a version is a thing that can change; this is 90
-//! lines of arithmetic that cannot. Every SDK is expected to use its own
-//! standard-library SHA-256 and get byte-identical digests, because SHA-256 is
-//! SHA-256.
-
-/// The SHA-256 digest of `bytes`.
 pub fn hash(bytes: &[u8]) -> [u8; 32] {
     let mut state = STATE;
     let mut block = [0u8; 64];
@@ -18,8 +8,6 @@ pub fn hash(bytes: &[u8]) -> [u8; 32] {
         compress(&mut state, &block);
     }
 
-    // The tail, `0x80`, zero padding, then the bit length as 8 bytes big
-    // endian - spilling into a second block when the tail leaves no room.
     let rest = &bytes[chunks * 64..];
     let mut tail = [0u8; 128];
     tail[..rest.len()].copy_from_slice(rest);
@@ -41,14 +29,10 @@ pub fn hash(bytes: &[u8]) -> [u8; 32] {
     digest
 }
 
-/// The initial hash value: the fractional parts of the square roots of the
-/// first eight primes.
 const STATE: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ];
 
-/// The round constants: the fractional parts of the cube roots of the first
-/// sixty-four primes.
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -110,7 +94,6 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     }
 }
 
-/// Lowercase hexadecimal, the only spelling of a digest this project writes.
 pub fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -125,7 +108,6 @@ pub fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::{hash, hex};
 
-    /// The three vectors every SHA-256 implementation is checked against.
     #[test]
     fn matches_the_published_vectors() {
         assert_eq!(
@@ -144,8 +126,6 @@ mod tests {
         );
     }
 
-    /// The padding branch: an input that leaves no room for the length in its
-    /// own last block, and one that leaves exactly enough.
     #[test]
     fn pads_across_a_block_boundary() {
         assert_eq!(

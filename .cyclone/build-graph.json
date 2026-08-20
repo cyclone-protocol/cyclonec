@@ -1,60 +1,60 @@
 {
   "schema_version": 1,
   "generator": "cyclonec 0.2.0",
-  "schema_fingerprint": "sha256:6d1b58906fa09ffa831b29a1fd0dbd42c725385554b2f193dafed9c252976059",
+  "schema_fingerprint": "sha256:893ffed3be8f593b233a9c4e25e64d20db9560f40ca704e639081ac3ee024870",
   "sha256_of": "each file with its `// generated-at:` line emptied, so an unchanged schema keeps an unchanged digest",
   "sources": {
-    "tests/fixtures/schema/device_state.rs": {
+    "tests/fixtures-ts/src/models/device_state.ts": {
       "models": [
         "DeviceState",
         "Telemetry"
       ],
       "outputs": [
         {
-          "path": "tests/fixtures/generated/device_state_edge.rs",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/device_state_edge.ts",
           "model": "DeviceState",
           "codec": "edge",
-          "fingerprint": "sha256:abd1e9ad26cb27552078ba8ef3c7ac2229d94b2004fe699b945f5d2980f49cab",
-          "sha256": "1925292d83b15218ba3ec07784a83918d8d27a18f2d5997c49957cc7cd793913"
+          "fingerprint": "sha256:08370babd3dd56e18c3c1b1ce28ee9ee222463f6c2348b91e3cf9ba7ee06ecee",
+          "sha256": "e394c04be6f6c3bab0d77969e2c6a25db36f74fda0a2a63edce034b5c31b9388"
         },
         {
-          "path": "tests/fixtures/generated/device_state_unity.rs",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/device_state_unity.ts",
           "model": "DeviceState",
           "codec": "unity",
-          "fingerprint": "sha256:a48e6b15be605bb9d6bd0d1ed1af8c5d588976e5635e1a437bf16409f1a48453",
-          "sha256": "8220fc89f7d628e5c2457ea6d9b609296796a395f1991097a5d2f97bb5ab3557"
+          "fingerprint": "sha256:21d6d62074b16fb3901eb8b9bc9a6fc09a3613506416c6ff471ee1fef19fab0b",
+          "sha256": "0448475b0b430146bdd0994d4a54f6a52b2f2ea597b1f56ae8038c69007275f0"
         },
         {
-          "path": "tests/fixtures/generated/telemetry_edge.rs",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/telemetry_edge.ts",
           "model": "Telemetry",
           "codec": "edge",
-          "fingerprint": "sha256:b684bfc5812407dcf11859552a4ffe8b52d22a02f2eaee118d896f49406e18c8",
-          "sha256": "048927ade291c68f05d86b95388e3531166ab0f9bfd4276065db3cd9c0d8e231"
+          "fingerprint": "sha256:61d7c61c25f19370590ed6d4ae9f04255ee544cd7356f5364fed04da8eab5c98",
+          "sha256": "dbd6c98dbc13c23352eb17e62a707ad8ae0280eec248cebc6a443e690fedcfa0"
         },
         {
-          "path": "tests/fixtures/generated/telemetry_orange_pi.rs",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/telemetry_orange_pi.ts",
           "model": "Telemetry",
           "codec": "orange_pi",
-          "fingerprint": "sha256:3ad024b5ba58d05af96949fa27f119da9db642189aae2dfd671e3eff51ded262",
-          "sha256": "451c5f08a21a5cee92eac447f4f2a0c8ab2479bd5e41742b87345835a246829d"
+          "fingerprint": "sha256:f09f1fb38b850fb9d52182717bfe27ff582361468a006ea9f66403f7fd5974f7",
+          "sha256": "a9907cf6b16514950dac2ae7b50602e79b4a45c643f7e0ada5cd3bf436656fe4"
         }
       ]
     },
-    "tests/fixtures/schema/every_primitive.rs": {
+    "tests/fixtures-ts/src/models/every_primitive.ts": {
       "models": [
         "EveryPrimitive"
       ],
       "outputs": [
         {
-          "path": "tests/fixtures/generated/every_primitive_edge.rs",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/every_primitive_edge.ts",
           "model": "EveryPrimitive",
           "codec": "edge",
-          "fingerprint": "sha256:8fd59d536dd8a425b252e4c8bebce752ae46b7f64925621dcfc14424c9e63302",
-          "sha256": "5a2a142776ffb7b2d0db82831c0df14ae99cc540c6b2f4b0a7237d81cbb41d4a"
+          "fingerprint": "sha256:ef0bc8bba9bc855501c2e691f8e65b003ca9f17b860f2693100a8219189ecf7e",
+          "sha256": "f3feea1e369a8871c4d718d43e5e8b3991c64df410ed3d9b775f7ba18e8e3cb6"
         }
       ]
     },
-    "tests/fixtures/schema/player.rs": {
+    "tests/fixtures-ts/src/models/player.ts": {
       "models": [
         "Player",
         "PlayerInfo",
@@ -62,44 +62,46 @@
       ],
       "outputs": [
         {
-          "path": "tests/fixtures/generated/player_edge.rs",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/player_edge.ts",
           "model": "Player",
           "codec": "edge",
-          "fingerprint": "sha256:231dd2d8744fecc3198c9853ffafe18023c93670fe7822c4cd9638fe9eabbe8b",
-          "sha256": "81db5bcfd376f5077b64424698f061875bc67d72bbe38d5cb277483a0d207b89"
+          "fingerprint": "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564",
+          "sha256": "f8faff254b10dec5a6cf3983d1205dcb5151a40c62bdd427a610faa002f19217"
         },
         {
-          "path": "tests/fixtures/generated/player_info_edge.rs",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/player_unity.ts",
+          "model": "Player",
+          "codec": "unity",
+          "fingerprint": "sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657",
+          "sha256": "e552e13cd692f6e64c4c619bd4dbf3aabda2b94d5d1ed616d64d508ba38be4a6"
+        },
+        {
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/player_info_edge.ts",
           "model": "PlayerInfo",
           "codec": "edge",
-          "fingerprint": "sha256:81962b09e3bcca4d6f5e160195d3fbe7d5af9e174ddb386474bd0c04284a5647",
-          "sha256": "a35d5c8292a57bc63660ee99a0e6ff6cf5331ee4346b1d6e9bc0f70453db75c7"
+          "fingerprint": "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c",
+          "sha256": "04d680395409d36379e6f059463186e76e27bb832abe567710adfcea8eb9bb37"
         },
         {
-          "path": "tests/fixtures/generated/team_edge.rs",
+          "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/team_edge.ts",
           "model": "Team",
           "codec": "edge",
-          "fingerprint": "sha256:1b0bfc430d3291ddab719ab1a90b554508e515a3f5018a01f87b84734d477384",
-          "sha256": "79d211e85c0b93afb18b16beee2250a15e6843bb96bc807cc326b7f0c144108c"
+          "fingerprint": "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605",
+          "sha256": "e074093098beeb6a9a6281ca4332e6e8478a0138886abeec607c625d9cf8918c"
         }
       ]
     }
   },
   "shared": [
     {
-      "path": "tests/fixtures/generated/runtime.rs",
+      "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/runtime.ts",
       "kind": "runtime",
-      "sha256": "34ddad6b061877598e825de88146a7db09a7cb16aaf64246ffddb0c044ac8e64"
+      "sha256": "a32b2520e2fa1d7152deee022fae3bf5c21b297ca4f1c01a5b8db3f69b12c732"
     },
     {
-      "path": "tests/fixtures/generated/handshake.rs",
+      "path": "/tmp/claude-1000/-home-thanghd-code-cyclone-cyclonec/a2de53e8-e019-48ed-9f30-c97b29558f82/scratchpad/out-old/fixtures-ts/handshake.ts",
       "kind": "handshake",
-      "sha256": "43d919a6d5d4416cbb87909876567b1fadb0f73e6645b22e85e0ca0c1bd85760"
-    },
-    {
-      "path": "tests/fixtures/generated/mod.rs",
-      "kind": "root",
-      "sha256": "ea531e1b75e8eba0f21e6b974fb32a8f6deb21f8a89f991bc74bbc2cf17efe3d"
+      "sha256": "31a61e4ac082704b088ac65c5a4a64266da517f9901c803cbfab95c3da764170"
     }
   ]
 }

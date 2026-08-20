@@ -1,25 +1,3 @@
-//! The Cyclone runtime, carried verbatim into `runtime.go`.
-//!
-//! The Go counterpart of [`super::rust_runtime`] - same reasoning, same
-//! guarantee: the block below is fixed, written once against RFC-0002, and
-//! copied out unchanged. Nothing about byte layout is computed per model, per
-//! field, or per run.
-//!
-//! Go has no exceptions, so where Rust returns `Result`, `Reader`'s methods
-//! return `(T, error)` - the idiom every generated `Decode` is written
-//! against: `value.ID, err = r.ReadU32()`.
-//!
-//! # What changed from `cyclonec_old`
-//!
-//! One method: [`Reader::FieldAbsent`] (see the block below). The old runtime
-//! gave a generated decoder no way to tell *this field never arrived* from
-//! *this field arrived truncated* - every read simply returned an
-//! `unexpected_eof` `DecodeError` - so the decoder could not implement
-//! RFC-0002 §9.1 at all. See `generator::go` for what the generated decoder
-//! does with it; the fix is identical in spirit to [`super::rust_runtime`]'s.
-
-/// The runtime block, emitted once, into its own file, right after the
-/// package clause.
 pub const RUNTIME: &str = r####"
 // ==========================================================================
 // Cyclone runtime - RFC-0002, carried verbatim.

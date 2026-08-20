@@ -1,62 +1,15 @@
-//! `--watch`: reread source on change, regenerate, keep going.
-//!
-//! No filesystem-event API is worth a dependency for (see `Cargo.toml`: none
-//! are wanted, in the generator or in what it generates), so this polls.
-//! Every tick it rereads exactly the file list [`crate::generate::plan`]
-//! would - never the output directory, never a file this generator wrote
-//! itself, since [`crate::generate::discover`] already excludes both - and
-//! hashes each file's contents with the crate's own [`crate::sha256`]. A
-//! save that fires several filesystem events (a temp file, then a rename)
-//! never causes two regenerations: polling only ever sees the *result* of
-//! however many events happened between two ticks, and a change is acted on
-//! only once it has stopped changing for a whole `settle_interval`, not on
-//! the first tick that notices it.
-//!
-//! Regeneration itself is not incremental at the parse level, and cannot be
-//! without redesigning the compiler: [`crate::ir::Schema::build`] takes every
-//! model in the project at once, because one model's fields can name
-//! another's regardless of which file declared it, and a fingerprint is
-//! computed over the whole schema's canonical form, not file by file. What
-//! *is* incremental, and needs no change here to be so, is the write: `apply`
-//! already compares each generated file's new contents against what is on
-//! disk and skips the ones that did not change, so editing one model still
-//! only ever rewrites that model's own codecs (and, for a shape-changing
-//! evolution, the shared `schema.json` / `build-graph.json` alongside them).
-
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::generate::{self, Options};
 use crate::sha256;
 
-/// How often to reread the source tree.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(150);
 
-/// How long a changed tree must sit still before it is regenerated - long
-/// enough that an editor's temp-file-then-rename save is very unlikely to be
-/// seen as two changes instead of one.
 pub const DEFAULT_SETTLE_INTERVAL: Duration = Duration::from_millis(75);
 
-/// One tick's worth of "what does source look like right now": every
-/// relevant file's project-relative path, paired with a digest of its
-/// contents. Two snapshots are equal exactly when nothing relevant was
-/// added, removed, or edited between them.
 type Snapshot = BTreeMap<String, [u8; 32]>;
 
-/// Watches `options.src` and regenerates `options.out` on every settled
-/// change, until `should_stop` returns `true`.
-///
-/// Performs the initial scan and generation before doing anything else -
-/// `should_stop` is not consulted until after it - so a caller that stops
-/// watching immediately still gets one full generation out of this call.
-///
-/// # Errors
-///
-/// Only ever the same errors `--src` itself would produce outside watch mode
-/// (a path that does not exist, e.g.) - never an error in a *model*: an
-/// invalid annotation or an unparsable file is reported to stderr and
-/// watched past, not returned, because a mistake in a source file is not a
-/// reason to end the process that would otherwise let someone fix it.
 pub fn run(
     options: &Options,
     quiet: bool,
@@ -79,9 +32,6 @@ pub fn run(
             continue;
         }
 
-        // Settle: keep sampling until two consecutive snapshots agree, so a
-        // save that touches the filesystem more than once - a temp file and
-        // a rename, e.g. - is regenerated from its final state, once.
         let mut settled = current;
         loop {
             std::thread::sleep(settle_interval);
@@ -102,9 +52,6 @@ pub fn run(
     Ok(())
 }
 
-/// One generation attempt: plan, apply, and say what happened - an error
-/// included, since watch mode's whole point is to survive one and keep
-/// going.
 fn regenerate(options: &Options, quiet: bool) {
     let outcome = generate::plan(options).and_then(|plan| generate::apply(&plan, false, quiet));
     if let Err(error) = outcome {
@@ -115,15 +62,6 @@ fn regenerate(options: &Options, quiet: bool) {
     }
 }
 
-/// The current content-hash of every file [`generate::discover`] would read
-/// for `options` right now.
-///
-/// A file that cannot be read at the moment of hashing - mid-write, or
-/// mid-rename - is left out of the snapshot rather than treated as an error:
-/// the next tick reads it again, and until then a snapshot simply missing
-/// that one key is still a snapshot that compares unequal to one that has
-/// it, which is exactly the "something changed" signal a save in progress
-/// ought to produce.
 fn snapshot(options: &Options) -> Result<Snapshot, String> {
     let sources = generate::discover(options)?;
     let mut snapshot = Snapshot::new();
@@ -145,9 +83,6 @@ mod tests {
     use crate::cli::Paths;
     use crate::generate::Options;
 
-    /// A scratch project of its own under `target/tests/watch-<name>`, with
-    /// one annotated Rust model - the same fixture shape `tests/cli.rs` uses,
-    /// built by hand here since this module cannot reach `tests/`.
     fn project(name: &str) -> PathBuf {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target/tests")
@@ -228,9 +163,6 @@ mod tests {
             out: Some(directory.join("generated")),
             model_path: None,
         };
-        // `Options::resolve` reads `cyclone.toml` from the process's own
-        // current directory, which this test does not want to depend on -
-        // built by hand instead, the same as `options()` above.
         let options = Options {
             src: paths.src,
             out: paths.out.expect("out"),

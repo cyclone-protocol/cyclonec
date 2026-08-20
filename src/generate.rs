@@ -1,19 +1,3 @@
-//! The pipeline: source in, tree out.
-//!
-//! ```text
-//! discover  →  parse  →  IR  →  render  →  compare  →  write
-//! ```
-//!
-//! `compare` sits between rendering and writing on purpose. The schema that is
-//! compared is the one this run just derived from source, and the schema it is
-//! compared *against* is the artifact of the previous run - never the other way
-//! round, and never an input to what gets generated.
-//!
-//! And the comparison cannot fail the command. Breaking a schema on purpose is
-//! a normal thing to do on a branch; being told about it is useful, being
-//! stopped is not. CI is where that becomes an error, because CI is where the
-//! other end of the wire is somebody else's running code.
-
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -27,9 +11,6 @@ use crate::json::Json;
 use crate::model::Model;
 use crate::schema;
 
-/// The language a source file is read as - and so the backend that generates
-/// from it. Read off the file's own extension, the same way `parser::parse`
-/// picks its scanner; never mixed within one run (see [`plan`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Language {
     Rust,
@@ -48,13 +29,6 @@ impl Language {
             Some("go") => Language::Go,
             Some("cs") => Language::CSharp,
             Some("gd") => Language::GDScript,
-            // `.h` is plain C's, not C++'s: the two share no other extension,
-            // and a C project's models live in headers as often as not, so
-            // giving `.h` to C++ (as an earlier revision of this generator
-            // did) would have left plain-C header-only models undiscoverable.
-            // A C++ project's headers use `.hpp` instead - one extension,
-            // one language, the same rule `Language::of` already applies to
-            // everything else.
             Some("c") | Some("h") => Language::C,
             Some("hpp") | Some("cpp") | Some("cc") | Some("cxx") => Language::Cpp,
             Some("ts") => Language::TypeScript,
@@ -77,41 +51,16 @@ impl Language {
     }
 }
 
-/// Everything a run needs to know about where things are.
 #[derive(Debug, Clone)]
 pub struct Options {
-    /// Directories or files to scan.
     pub src: Vec<PathBuf>,
-    /// Where generated source goes.
     pub out: PathBuf,
-    /// The directory `.cyclone/` lives in.
     pub root: PathBuf,
-    /// Overrides how a generated codec reaches your models, in place of the
-    /// default. Rust: a module path (`crate::models` makes every model
-    /// `crate::models::<Model>`). Go: an import path (the package a model's
-    /// source declares is still read from that source, not guessed from this
-    /// path). C#: a namespace (every model is treated as declared in it,
-    /// overriding whatever `namespace` its own source actually declares).
-    /// C++: a namespace too, the same way - the `#include` path a generated
-    /// header needs is always the model's own source path and is never
-    /// affected by this option, since that is a physical fact about the
-    /// build, not a logical one this option is for. GDScript and C: nothing -
-    /// GDScript because a model's own `class_name` is already globally
-    /// reachable with nothing to override, C because it has no namespace at
-    /// all to begin with, only the same physical `#include` C++ has (and,
-    /// like C++'s, never affected by this option). This option has no effect
-    /// on either backend.
     pub model_path: Option<String>,
-    /// Whether generated frames carry `[MessageId][MessageFingerprint]`.
     pub validate_message_fingerprint: bool,
 }
 
 impl Options {
-    /// Merges the command line over `cyclone.toml` over the defaults.
-    ///
-    /// # Errors
-    ///
-    /// A `cyclone.toml` that cannot be read or understood.
     pub fn resolve(paths: &Paths) -> Result<Options, String> {
         let root = PathBuf::from(".");
         let config = Config::load(&root)?;
@@ -141,63 +90,36 @@ impl Options {
         })
     }
 
-    /// The path of `.cyclone/schema.json`.
     pub fn schema_path(&self) -> PathBuf {
         self.root.join(schema::PATH)
     }
 
-    /// The path of `.cyclone/build-graph.json`.
     pub fn build_graph_path(&self) -> PathBuf {
         self.root.join(buildgraph::PATH)
     }
 }
 
-/// One file this run would write.
 #[derive(Debug, Clone)]
 pub struct PlannedFile {
     pub path: PathBuf,
     pub contents: String,
-    /// Whether two versions differing only in their `generated-at:` line count
-    /// as the same file. True for generated source, false for the JSON
-    /// artifacts, which carry no timestamp at all.
     pub timestamped: bool,
 }
 
-/// What a run would do, worked out without touching the output tree.
 pub struct Plan {
-    /// The schema this run derived from source - the source of truth.
     pub schema: Schema,
-    /// Every file to write, in the order to write it.
     pub files: Vec<PlannedFile>,
-    /// Files a previous run wrote that this one does not: a codec whose model
-    /// or codec is gone.
     pub obsolete: Vec<PathBuf>,
 }
 
-/// Reads the sources and works out everything that would be written.
-///
-/// # Errors
-///
-/// A source that cannot be read, an annotation that cannot be understood, or a
-/// schema that does not check out. Nothing is written before every one of those
-/// has passed.
 pub fn plan(options: &Options) -> Result<Plan, String> {
     let sources = discover(options)?;
 
     let mut parsed: Vec<(PathBuf, Vec<Model>)> = Vec::new();
-    // The `package` clause each Go source declares, keyed by its full path
-    // (`model.source`'s own format) - read once, here, while the text is
-    // still in hand, rather than re-read later.
     let mut go_packages: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
-    // The `namespace` each C# source declares, if any - the C# counterpart of
-    // `go_packages`. `None` means the source declared no namespace at all
-    // (C#'s global namespace), which is a valid answer, not a missing one.
     let mut csharp_namespaces: std::collections::BTreeMap<String, Option<String>> =
         std::collections::BTreeMap::new();
-    // The first `namespace` each C++ source opens, if any - the C++
-    // counterpart of `csharp_namespaces`, read the same way and for the same
-    // reason (see `generator::cpp::ModelLocation::namespace`).
     let mut cpp_namespaces: std::collections::BTreeMap<String, Option<String>> =
         std::collections::BTreeMap::new();
     let mut has_rust = false;
@@ -205,14 +127,7 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
     let mut has_csharp = false;
     let mut has_gdscript = false;
     let mut has_cpp = false;
-    // Plain C has no `namespace` to read - a global, flat symbol space is
-    // exactly what a generated C tree already needs (see `generator::c`), so
-    // unlike `cpp_namespaces` there is nothing to collect here.
     let mut has_c = false;
-    // TypeScript and JavaScript need nothing collected here either: a
-    // generated codec reaches a model through an ES `import`, and where that
-    // points is computed from `model.source` alone once the schema exists -
-    // see `model_specifiers`.
     let mut has_typescript = false;
     let mut has_javascript = false;
     let mut failures = 0;
@@ -348,19 +263,13 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
     })
 }
 
-/// A backend's half of [`plan`]: the files it writes, the codec artifacts
-/// among them (for the build graph), and which of them are shared rather than
-/// tied to one model (the runtime, the handshake, and - Rust only - the
-/// module root).
 type BackendPlan = (Vec<PlannedFile>, Vec<Artifact>, Vec<Shared>);
 
-/// The Rust half of [`plan`]: the module tree, exactly as before.
 fn plan_rust(
     options: &Options,
     schema: &Schema,
     parsed: &[(PathBuf, Vec<Model>)],
 ) -> Result<BackendPlan, String> {
-    // Where each model's type can be reached from inside the generated tree.
     let types = model_paths(options, parsed);
     let imports = generator::rust::Imports {
         types: &types,
@@ -386,9 +295,6 @@ fn plan_rust(
         timestamped: true,
     });
 
-    // The tree is flat: one module per model per codec, all siblings of the
-    // runtime. Model names are unique in a schema, so `<model>_<codec>` is too,
-    // and a flat tree is a tree every file can reach with one `super::`.
     for model in &schema.models {
         for message in &model.messages {
             let module = generator::rust::module_name(&model.name, &message.codec);
@@ -447,7 +353,6 @@ fn plan_rust(
     Ok((files, artifacts, shared))
 }
 
-/// The runtime file: the header, then the RFC-0002 block verbatim.
 fn runtime_file() -> String {
     let mut out = generator::Header {
         note: Some(
@@ -463,21 +368,6 @@ fn runtime_file() -> String {
     out
 }
 
-// ==================================================================== Go plan
-
-/// The Go half of [`plan`].
-///
-/// Go compiles by package, not by file, so - unlike [`plan_rust`] - there is
-/// no module root to write and codecs never import one another: every
-/// generated file here shares one `package` clause (derived from `--out`'s
-/// own directory name), and only the *model* types they name ever need an
-/// `import`.
-///
-/// # Errors
-///
-/// No `go.mod` at the project root (the Go backend needs one to compute
-/// import paths - see [`gomod`]), a model with `Array<Array<T>>` (a known gap,
-/// see [`generator::go`]), or two codecs that would collide on one file name.
 fn plan_go(
     options: &Options,
     schema: &Schema,
@@ -505,9 +395,6 @@ fn plan_go(
     let package = generator::go::package_name_from_out(&options.out);
     let own_import_path = gomod::import_path_of_dir(&module, &options.out);
 
-    // Where each model's Go type can be reached from, and under what package
-    // name it was declared - read from source rather than derived from the
-    // path, because the two need not match.
     let mut locations = std::collections::BTreeMap::new();
     for model in &schema.models {
         let import_path = match &options.model_path {
@@ -611,8 +498,6 @@ fn plan_go(
     Ok((files, artifacts, shared))
 }
 
-/// The Go runtime file: the header, the package clause, then the RFC-0002
-/// block verbatim.
 fn go_runtime_file(package: &str) -> String {
     let mut out = generator::Header {
         note: Some(
@@ -628,23 +513,6 @@ fn go_runtime_file(package: &str) -> String {
     out
 }
 
-// =================================================================== C# plan
-
-/// The C# half of [`plan`].
-///
-/// C# compiles by project, not by directory or by package, so - unlike
-/// [`plan_go`] - there is no external project file this backend needs to find
-/// first: a namespace is self-declared by whatever source wrote it, and a
-/// cross-namespace reference is always spelled out in full rather than
-/// `import`ed, so nothing here has to compute an import path at all. Every
-/// generated file in one run still shares one namespace, derived from
-/// `--out`'s own directory name - the C# counterpart of the package name
-/// [`plan_go`] derives the same way.
-///
-/// # Errors
-///
-/// A model with `Array<Array<T>>` (a deliberate gap, see
-/// [`generator::csharp`]), or two codecs that would collide on one file name.
 fn plan_csharp(
     options: &Options,
     schema: &Schema,
@@ -656,10 +524,6 @@ fn plan_csharp(
 
     let namespace = generator::csharp::namespace_from_out(&options.out);
 
-    // Where each model's C# namespace is, so a generated codec can qualify a
-    // reference to it - read from source rather than derived from the path,
-    // because the two need not match. `--model-path` overrides every model at
-    // once, the same as it does for Go's import path.
     let mut locations: std::collections::BTreeMap<String, Option<String>> =
         std::collections::BTreeMap::new();
     for model in &schema.models {
@@ -755,8 +619,6 @@ fn plan_csharp(
     Ok((files, artifacts, shared))
 }
 
-/// The C# runtime file: the header, then the namespace and the RFC-0002
-/// block verbatim inside it.
 fn csharp_runtime_file(namespace: &str) -> String {
     let mut out = generator::Header {
         note: Some(
@@ -773,24 +635,6 @@ fn csharp_runtime_file(namespace: &str) -> String {
     out
 }
 
-// ============================================================== GDScript plan
-
-/// The GDScript half of [`plan`].
-///
-/// GDScript needs no external project file, no package, and no namespace:
-/// every model, and every generated codec, already declares its own
-/// `class_name`, and Godot makes that name reachable project-wide with
-/// nothing to `preload` or `import`. So unlike [`plan_go`] and
-/// [`plan_csharp`], there is no `Imports` type here and no per-source
-/// location to track - the discovery loop above never bothers building one
-/// for GDScript, the way it does `go_packages` and `csharp_namespaces`.
-///
-/// # Errors
-///
-/// A model with `Array<Array<T>>` (a deliberate gap, see
-/// [`generator::gdscript`]), two constants that would collide (see
-/// [`generator::gdscript_handshake`]), or two codecs that would collide on
-/// one file name.
 fn plan_gdscript(options: &Options, schema: &Schema) -> Result<BackendPlan, String> {
     for model in &schema.models {
         generator::gdscript::check_no_nested_arrays(model)?;
@@ -872,8 +716,6 @@ fn plan_gdscript(options: &Options, schema: &Schema) -> Result<BackendPlan, Stri
     Ok((files, artifacts, shared))
 }
 
-/// The GDScript runtime file: the header, the file's own `class_name
-/// CycloneRuntime`, then the RFC-0002 block verbatim.
 fn gdscript_runtime_file() -> String {
     let mut out = generator::gdscript::Header {
         note: Some(
@@ -889,24 +731,6 @@ fn gdscript_runtime_file() -> String {
     out
 }
 
-// ==================================================================== C++ plan
-
-/// The C++ half of [`plan`].
-///
-/// C++ needs no external project file, no package and no namespace of its
-/// own the way Go needs `go.mod` - a namespace is self-declared by whatever
-/// source wrote it, the same as C#'s, and this generator derives one more
-/// for the generated tree itself from `--out`'s own directory name, the C++
-/// counterpart of [`plan_go`]'s package name and [`plan_csharp`]'s namespace.
-/// What C++ needs that neither of those does is a physical `#include` for
-/// every model a generated header touches - see
-/// [`generator::cpp::ModelLocation`].
-///
-/// # Errors
-///
-/// A model with `Array<Array<T>>` (a deliberate gap, see [`generator::cpp`]),
-/// two constants that would collide (see [`generator::cpp_handshake`]), or
-/// two codecs that would collide on one file name.
 fn plan_cpp(
     options: &Options,
     schema: &Schema,
@@ -918,10 +742,6 @@ fn plan_cpp(
 
     let namespace = generator::cpp::namespace_from_out(&options.out);
 
-    // Where each model's C++ type is declared: the `#include` is always the
-    // model's own source path (never overridden - see
-    // `Options::model_path`'s doc comment), and the namespace is read from
-    // source unless `--model-path` overrides it uniformly, the same as C#.
     let mut locations: std::collections::BTreeMap<String, generator::cpp::ModelLocation> =
         std::collections::BTreeMap::new();
     for model in &schema.models {
@@ -1018,8 +838,6 @@ fn plan_cpp(
     Ok((files, artifacts, shared))
 }
 
-/// The C++ runtime file: the header, `#pragma once`, the standard includes it
-/// needs, then the namespace and the RFC-0002 block verbatim inside it.
 fn cpp_runtime_file(namespace: &str) -> String {
     let mut out = generator::Header {
         note: Some(
@@ -1041,35 +859,11 @@ fn cpp_runtime_file(namespace: &str) -> String {
     out
 }
 
-// ====================================================================== C plan
-
-/// The C half of [`plan`].
-///
-/// Plain C needs no external project file and - unlike [`plan_cpp`] - no
-/// namespace of its own to derive from `--out`, because C has no namespace at
-/// all: every generated identifier is already global, prefixed by model and
-/// codec name the same way [`generator::c`]'s whole naming scheme is built
-/// around. What it needs that [`plan_cpp`] does not is `arrays.h` - one owned
-/// array type per distinct `Array<T>` element type the schema uses, written
-/// once and shared, since C has no `std::vector<T>` of its own - and one more
-/// file per model, `<model>_cyclone.h`, carrying the `<Model>_free` that
-/// releases whatever any of that model's codecs allocated (see
-/// [`generator::c::free_file`]).
-///
-/// # Errors
-///
-/// A model with `Array<Array<T>>` (a deliberate gap, see [`generator::c`]),
-/// two constants that would collide (see [`generator::c_handshake`]), or two
-/// generated files that would collide on one name.
 fn plan_c(options: &Options, schema: &Schema) -> Result<BackendPlan, String> {
     for model in &schema.models {
         generator::c::check_no_nested_arrays(model)?;
     }
 
-    // Where each model's C `struct` is declared: always the model's own
-    // source path, exactly as C++'s is - `--model-path` has no effect on this
-    // backend at all, since C has no namespace for it to override (see
-    // `Options::model_path`'s doc comment).
     let mut locations: std::collections::BTreeMap<String, generator::c::ModelLocation> =
         std::collections::BTreeMap::new();
     for model in &schema.models {
@@ -1179,10 +973,6 @@ fn plan_c(options: &Options, schema: &Schema) -> Result<BackendPlan, String> {
     Ok((files, artifacts, shared))
 }
 
-/// The C runtime file: the header, `#pragma once`, the standard includes it
-/// needs, then the RFC-0002 block verbatim. No namespace to open: unlike
-/// [`cpp_runtime_file`], every name in it is already global, exactly the way
-/// [`generator::c`]'s own generated names are.
 fn c_runtime_file() -> String {
     let mut out = generator::Header {
         note: Some(
@@ -1203,22 +993,6 @@ fn c_runtime_file() -> String {
     out
 }
 
-// ============================================================= TypeScript plan
-
-/// The TypeScript half of [`plan`].
-///
-/// TypeScript needs no external project file, no package and no namespace -
-/// a model is reached from a generated codec file the way any two ES
-/// modules reach each other, through a relative `import` computed straight
-/// from `model.source` (see [`model_specifiers`]), the same "no project file
-/// needed" simplicity [`plan_gdscript`] has, but with the real per-file paths
-/// [`plan_cpp`]'s `#include`s have instead of a single global namespace.
-///
-/// # Errors
-///
-/// A model with `Array<Array<T>>` (a deliberate gap, see
-/// [`generator::typescript`]), or two codecs that would collide on one file
-/// name.
 fn plan_typescript(options: &Options, schema: &Schema) -> Result<BackendPlan, String> {
     for model in &schema.models {
         generator::typescript::check_no_nested_arrays(model)?;
@@ -1310,7 +1084,6 @@ fn plan_typescript(options: &Options, schema: &Schema) -> Result<BackendPlan, St
     Ok((files, artifacts, shared))
 }
 
-/// The TypeScript runtime file: the header, then the RFC-0002 block verbatim.
 fn typescript_runtime_file() -> String {
     let mut out = generator::Header {
         note: Some(
@@ -1325,18 +1098,6 @@ fn typescript_runtime_file() -> String {
     out
 }
 
-// ============================================================= JavaScript plan
-
-/// The JavaScript half of [`plan`] - identical in shape to
-/// [`plan_typescript`], and for the same reason: TypeScript and JavaScript
-/// share one annotation concept and one [`crate::ir`] walk, so the only
-/// difference between the two plans is which [`generator`] backend renders
-/// the files.
-///
-/// # Errors
-///
-/// A model with `Array<Array<T>>`, or two codecs that would collide on one
-/// file name - see [`plan_typescript`].
 fn plan_javascript(options: &Options, schema: &Schema) -> Result<BackendPlan, String> {
     for model in &schema.models {
         generator::javascript::check_no_nested_arrays(model)?;
@@ -1428,7 +1189,6 @@ fn plan_javascript(options: &Options, schema: &Schema) -> Result<BackendPlan, St
     Ok((files, artifacts, shared))
 }
 
-/// The JavaScript runtime file: the header, then the RFC-0002 block verbatim.
 fn javascript_runtime_file() -> String {
     let mut out = generator::Header {
         note: Some(
@@ -1443,17 +1203,6 @@ fn javascript_runtime_file() -> String {
     out
 }
 
-/// Where each model's own class can be reached from, as an ES module
-/// specifier - shared by [`plan_typescript`] and [`plan_javascript`], since
-/// both resolve a model's location the same way.
-///
-/// `--model-path` (`options.model_path`), if given, replaces every model's
-/// specifier uniformly with one shared module - a barrel file re-exporting
-/// every model - the same "one string overrides every model at once"
-/// meaning `--model-path` has for Rust's module path and Go's import path.
-/// The default reads `model.source` (already the project-root-relative path
-/// `cyclonec` was pointed at) and computes a relative specifier from `--out`
-/// to it, the way any two ES modules address each other.
 fn model_specifiers(
     options: &Options,
     schema: &Schema,
@@ -1471,11 +1220,6 @@ fn model_specifiers(
         .collect()
 }
 
-/// The ES module specifier a file in `out` uses to reach `source` - a
-/// project-root-relative, `/`-separated path with its own extension.
-/// Relative, without an extension, and always starting with `./` or `../`:
-/// a bare specifier (`"models/player"`) resolves as a package name under
-/// Node's module resolution, which this is never meant to be.
 fn relative_module_specifier(out: &Path, source: &str) -> String {
     let source_path = Path::new(source);
     let out_components: Vec<_> = out.components().collect();
@@ -1514,21 +1258,9 @@ fn relative_module_specifier(out: &Path, source: &str) -> String {
     }
 }
 
-/// Writes (or, with `check`, only inspects) everything the plan holds.
-///
-/// Returns whether the tree on disk is - or now is - what the plan says.
-///
-/// # Errors
-///
-/// A file that cannot be written.
 pub fn apply(plan: &Plan, check: bool, quiet: bool) -> Result<bool, String> {
     let mut current = true;
 
-    // Obsolete files go first, before anything is written. On a case-insensitive
-    // filesystem - Windows, macOS by default - a file that was renamed only in
-    // case is the *same* file on disk, so removing after writing would delete
-    // what this run just produced. `obsolete` never names a file the plan also
-    // writes, so nothing here can remove a file that is still wanted.
     for path in &plan.obsolete {
         if check {
             eprintln!(
@@ -1586,14 +1318,6 @@ pub fn apply(plan: &Plan, check: bool, quiet: bool) -> Result<bool, String> {
     Ok(current)
 }
 
-/// Files the previous build graph claims this generator wrote, which this run
-/// does not write again.
-///
-/// A codec whose model was deleted leaves a file behind that nothing includes
-/// and nothing compiles - inert, but confusing, and the sort of thing that gets
-/// hand-edited months later by somebody who does not know it is dead. Only
-/// files that still carry the generated marker are removed; anything a human
-/// has replaced is left alone.
 fn obsolete(options: &Options, files: &[PlannedFile]) -> Vec<PathBuf> {
     let Ok(text) = std::fs::read_to_string(options.build_graph_path()) else {
         return Vec::new();
@@ -1613,10 +1337,6 @@ fn obsolete(options: &Options, files: &[PlannedFile]) -> Vec<PathBuf> {
         .iter()
         .filter_map(|(_, entry)| entry.get("outputs").and_then(Json::as_array))
         .flatten();
-    // The shared files too: a run that changes the tree's shape - as the move
-    // from one `include!`d file to a module tree did - leaves the old shape's
-    // root behind, and a stray `cyclone.rs` full of `include!` is exactly the
-    // kind of thing somebody finds and tries to use.
     let shared = document
         .get("shared")
         .and_then(Json::as_array)
@@ -1630,10 +1350,6 @@ fn obsolete(options: &Options, files: &[PlannedFile]) -> Vec<PathBuf> {
             continue;
         }
         let path = PathBuf::from(path);
-        // Only ever inside the directory this run is writing. A run with a
-        // different `--out` has moved the tree, not orphaned it, and deleting
-        // the old location - possibly the project's real one, from a one-off
-        // override - is not this command's call to make.
         if !path.starts_with(&options.out) {
             continue;
         }
@@ -1646,23 +1362,6 @@ fn obsolete(options: &Options, files: &[PlannedFile]) -> Vec<PathBuf> {
     obsolete
 }
 
-// =============================================================== model paths
-
-/// Where each model's type can be reached from inside the generated tree.
-///
-/// A generated codec is a module now, so it has to `use` the model it encodes,
-/// and only the project knows where that model lives. The default reads it off
-/// the source layout, which is the same thing Rust itself does:
-///
-/// ```text
-/// src/models/player.rs   →  crate::models::player::Player
-/// src/lib.rs             →  crate::Player
-/// src/models/mod.rs      →  crate::models::Player
-/// ```
-///
-/// A project whose modules do not mirror its directories - or one that
-/// re-exports every model from one place - overrides it wholesale with
-/// `model_path` in `cyclone.toml`, or `--model-path`.
 pub fn model_paths(
     options: &Options,
     parsed: &[(PathBuf, Vec<Model>)],
@@ -1687,15 +1386,12 @@ pub fn model_paths(
     paths
 }
 
-/// `models/player.rs` → `crate::models::player`.
 fn module_path_of(relative_source: &Path) -> String {
     let mut parts = vec!["crate".to_owned()];
 
     for component in relative_source.components() {
         let text = component.as_os_str().to_string_lossy().into_owned();
         let text = text.strip_suffix(".rs").unwrap_or(&text).to_owned();
-        // `mod.rs`, `lib.rs` and `main.rs` are their directory, not a module
-        // under it.
         if matches!(text.as_str(), "mod" | "lib" | "main") {
             continue;
         }
@@ -1705,11 +1401,6 @@ fn module_path_of(relative_source: &Path) -> String {
     parts.join("::")
 }
 
-/// Two codecs may not want the same module.
-///
-/// `DeviceState` + `unity` and `DeviceStateUnity` + no codec would both like to
-/// be `device_state_unity`. Vanishingly rare, entirely mechanical, and far
-/// better said here than as a duplicate-definition error in the user's build.
 fn check_module_names(modules: &[String]) -> Result<(), String> {
     for (index, module) in modules.iter().enumerate() {
         if modules[..index].contains(module) {
@@ -1722,15 +1413,6 @@ fn check_module_names(modules: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-// ================================================================== discovery
-
-/// Every source file to read, as `(root, path)` - the root being the `--src`
-/// entry it was found under, which is what output paths are made relative to.
-///
-/// `pub(crate)` rather than private: [`crate::watch`] calls this directly, on
-/// every poll, to build the same file list [`plan`] would read from -
-/// watching exactly what generation reads, with no second list to drift out
-/// of step with the first.
 pub(crate) fn discover(options: &Options) -> Result<Vec<(PathBuf, PathBuf)>, String> {
     let mut sources = Vec::new();
 
@@ -1739,8 +1421,6 @@ pub(crate) fn discover(options: &Options) -> Result<Vec<(PathBuf, PathBuf)>, Str
             std::fs::metadata(entry).map_err(|error| format!("{}: {error}", display(entry)))?;
 
         if metadata.is_file() {
-            // A file named explicitly is read even if discovery would have
-            // skipped it; the caller said so.
             let root = entry.parent().unwrap_or(Path::new(".")).to_path_buf();
             sources.push((root, entry.clone()));
             continue;
@@ -1760,8 +1440,6 @@ fn walk(
     out: &Path,
     sources: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<(), String> {
-    // `target/` is a build directory, and the output tree is this generator's
-    // own writing - reading either back in would be a loop at best.
     if directory.file_name().is_some_and(|name| name == "target") || same_path(directory, out) {
         return Ok(());
     }
@@ -1800,19 +1478,10 @@ fn walk(
     Ok(())
 }
 
-/// Whether a file was written by this generator.
-///
-/// The marker in the header, not the file name: a project may put generated
-/// code anywhere, and `--out` is not the only place it can end up once
-/// somebody moves a directory.
 fn is_generated(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|text| starts_with_a_marker(&text))
 }
 
-/// Whether `text` opens with this generator's own marker - either spelling:
-/// [`generator::MARKER`] (Rust, Go, C#) or [`generator::GDSCRIPT_MARKER`]
-/// (GDScript, whose `#` comment syntax the `//`-based marker would not
-/// compile as).
 fn starts_with_a_marker(text: &str) -> bool {
     text.starts_with(generator::MARKER) || text.starts_with(generator::GDSCRIPT_MARKER)
 }
@@ -1824,16 +1493,11 @@ fn same_path(left: &Path, right: &Path) -> bool {
     }
 }
 
-// ======================================================================= paths
-
-/// A path as this crate prints and stores it: `/` separators everywhere, and
-/// no leading `./`.
 pub fn display(path: &Path) -> String {
     let text = path.to_string_lossy().replace('\\', "/");
     text.strip_prefix("./").unwrap_or(&text).to_owned()
 }
 
-/// `path` with `root` removed from the front, if it is there.
 fn relative(root: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).to_path_buf()
 }
@@ -1844,8 +1508,6 @@ mod tests {
 
     use super::{check_module_names, display, module_path_of};
 
-    /// The default follows Rust's own rule: a directory is a module, a file is
-    /// a module, and `mod.rs` / `lib.rs` / `main.rs` are their directory.
     #[test]
     fn a_model_path_is_read_off_the_source_layout() {
         assert_eq!(

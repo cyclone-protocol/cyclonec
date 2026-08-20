@@ -1,72 +1,8 @@
-//! TypeScript / JavaScript source → [`Model`]s.
-//!
-//! Neither language has anything like Rust's `#[network]` or C#'s `[Network]`
-//! that survives being told "no decorators, no runtime dependency" - a
-//! decorator is exactly a runtime dependency (`reflect-metadata`, or a
-//! transform in the build), and the brief this backend was written against
-//! forbids requiring one. So, like [`crate::parser::go`] and
-//! [`crate::parser::gdscript`], Cyclone metadata here lives in comments:
-//!
-//! ```text
-//! // CYCLONE_MODEL                    this class is a model
-//! // CYCLONE_CODEC("edge", "unity")   generate these codecs
-//! class DeviceState {
-//!     // CYCLONE_FIELD(u32)           this field's wire type
-//!     // CYCLONE_CODEC("edge", "unity")   this field's codecs
-//!     Id: number;
-//! }
-//! ```
-//!
-//! One scanner reads both languages. A field's host type - `number`, absent
-//! entirely in plain JavaScript - is never read, for the same reason
-//! [`crate::parser`] never reads one anywhere else: `// CYCLONE_FIELD(TYPE)`
-//! already said what goes on the wire, and `number` cannot tell `cyclonec`
-//! whether that is `u32`, `i32`, `f32` or `f64`. So a `.ts` class and the
-//! same class with every type annotation stripped for `.js` produce the
-//! identical [`Model`] - which is the whole of what "TypeScript and
-//! JavaScript share one annotation concept" (the brief's own words) means at
-//! this layer.
-//!
-//! # Two errors Rust's own scanner does not have
-//!
-//! Like [`crate::parser::go`]'s `//cyclone:model` directive,
-//! `// CYCLONE_MODEL` is text on a line by itself, with nothing in the
-//! language forcing it to sit next to the class it names - a directive not
-//! immediately followed by a `class` declaration would otherwise mark
-//! nothing and vanish silently. And unlike Rust's bracketed
-//! `#[network(TYPE)]`, `// CYCLONE_CODEC("a", "b")` takes quoted string
-//! arguments, so a codec list with an unquoted name or a missing closing
-//! parenthesis is reported as malformed rather than silently misread.
-//!
-//! # A known gap
-//!
-//! Field types are skipped, not parsed, by walking bracket depth to the next
-//! top-level `;`, `,` or the class body's own `}` - the same technique
-//! [`crate::parser::rust`]'s `skip_field_type` uses. A method whose return
-//! type is itself an object type literal (`foo(): { a: number } { ... }`)
-//! can defeat that heuristic, because both a return type's object literal and
-//! a method body open with the same `{`; give it a named return type instead.
-//! Cyclone models are plain data, so this does not affect any field
-//! declaration - only an unusual method signature living in the same class.
-
 use std::path::Path;
 
 use crate::model::{Field, Model};
 use crate::parser::Error;
 
-/// Extracts every `// CYCLONE_MODEL` class from `text`.
-///
-/// Used for both `.ts` and `.js` sources - see the module docs for why one
-/// scanner is correct for both.
-///
-/// # Errors
-///
-/// A `// CYCLONE_MODEL` not immediately followed by a named class, a
-/// `// CYCLONE_FIELD(...)` not immediately followed by a field, a field
-/// carrying `// CYCLONE_CODEC(...)` with no `// CYCLONE_FIELD(...)`, a
-/// malformed `// CYCLONE_CODEC(...)`, or a field/class doubly annotated.
-/// Source that does not compile for any other reason is `tsc`'s (or a
-/// bundler's) to report.
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     let tokens = lex(text);
     Scanner {
@@ -77,33 +13,16 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     .file()
 }
 
-// ============================================================== the scanner
-
 struct Scanner<'a> {
     path: &'a Path,
     tokens: &'a [Token<'a>],
     at: usize,
 }
 
-/// The Cyclone directives collected so far, waiting for the class or field
-/// they precede.
-///
-/// `marker` carries two different meanings depending on which scope this
-/// `Pending` belongs to - file level, where it is `// CYCLONE_MODEL`, or
-/// field level, where it is `// CYCLONE_FIELD(TYPE)` - the same reuse
-/// [`crate::parser::rust::Pending::network`] makes, and for the same reason:
-/// the two are never live at once, because a fresh `Pending` is used for
-/// each scope.
 #[derive(Default)]
 struct Pending {
-    /// `Some(None)`: the marker was seen but carried no usable type (file
-    /// level: `// CYCLONE_MODEL` always looks like this, since it takes no
-    /// argument; field level: `// CYCLONE_FIELD` with no, or a malformed,
-    /// argument). `Some(Some(ty))`: `// CYCLONE_FIELD(ty)`.
     marker: Option<Option<String>>,
-    /// Every codec named by `// CYCLONE_CODEC(...)`, in order.
     codecs: Vec<String>,
-    /// The line the first Cyclone directive was on.
     line: usize,
 }
 
@@ -116,7 +35,6 @@ impl Pending {
 }
 
 impl<'a> Scanner<'a> {
-    /// Walks a file, collecting models declared at any depth.
     fn file(&mut self) -> Result<Vec<Model>, Error> {
         let mut models = Vec::new();
         let mut pending = Pending::default();
@@ -129,8 +47,6 @@ impl<'a> Scanner<'a> {
                     self.apply_directive(line, text, &mut pending)?;
                 }
 
-                // A pending `CYCLONE_MODEL` may be separated from `class` by
-                // nothing but these modifiers.
                 Kind::Ident("export") | Kind::Ident("default") | Kind::Ident("abstract")
                     if pending.marker.is_some() =>
                 {
@@ -169,8 +85,6 @@ impl<'a> Scanner<'a> {
         Ok(models)
     }
 
-    /// Reads a class declaration (the cursor just past `class`), returning it
-    /// if it is a model.
     fn klass(&mut self, pending: &mut Pending) -> Result<Option<Model>, Error> {
         let is_model = pending.marker.is_some();
         let line = if pending.line == 0 {
@@ -184,9 +98,6 @@ impl<'a> Scanner<'a> {
             self.bump();
         }
 
-        // Generics, `extends`, `implements`: stepped over without being
-        // read. A class ending in `;` (an ambient `declare class`) has no
-        // body at all.
         let body = self.class_header_tail();
 
         let Some(name) = name else {
@@ -199,8 +110,6 @@ impl<'a> Scanner<'a> {
             return Ok(None);
         };
 
-        // A class nothing marks is somebody else's type. It must not become
-        // an error just because it shares a file with a model.
         if !is_model {
             if let Some(open) = body {
                 self.at = self.matching(open, '{', '}') + 1;
@@ -224,10 +133,6 @@ impl<'a> Scanner<'a> {
         }))
     }
 
-    /// Reads the annotated fields out of a class body.
-    ///
-    /// `open` is the index of the body's `{`; the cursor is left past its
-    /// `}`.
     fn fields(&mut self, open: usize) -> Result<Vec<Field>, Error> {
         let close = self.matching(open, '{', '}');
         self.at = open + 1;
@@ -266,7 +171,6 @@ impl<'a> Scanner<'a> {
             };
             self.bump();
 
-            // `get name() {}` / `set name(v) {}` - an accessor, not a field.
             if (name == "get" || name == "set") && self.peek().and_then(Token::ident).is_some() {
                 self.dangling(&pending)?;
                 self.bump();
@@ -275,7 +179,6 @@ impl<'a> Scanner<'a> {
                 continue;
             }
 
-            // `name(...)` or `name<T>(...)` - a method.
             if self.at_method_start() {
                 self.dangling(&pending)?;
                 self.skip_member_tail(close);
@@ -283,7 +186,6 @@ impl<'a> Scanner<'a> {
                 continue;
             }
 
-            // A field.
             let line = pending.line;
             self.skip_field_tail(close);
 
@@ -315,8 +217,6 @@ impl<'a> Scanner<'a> {
         Ok(fields)
     }
 
-    /// A `// CYCLONE_FIELD` (or a field-level `// CYCLONE_CODEC`) that turns
-    /// out to precede a method, an accessor, or nothing at all.
     fn dangling(&self, pending: &Pending) -> Result<(), Error> {
         if pending.marker.is_some() || !pending.codecs.is_empty() {
             return Err(self.error(
@@ -327,8 +227,6 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
-    /// Reads one directive comment's name and arguments, folding it into
-    /// `pending`.
     fn apply_directive(&self, line: usize, text: &str, pending: &mut Pending) -> Result<(), Error> {
         let (name, args) = split_directive(text);
 
@@ -385,15 +283,11 @@ impl<'a> Scanner<'a> {
                     }
                 }
             }
-            // Not one of ours - an ordinary comment that happens to start
-            // with `CYCLONE_`.
             _ => {}
         }
 
         Ok(())
     }
-
-    // ------------------------------------------------------------- movement
 
     fn peek(&self) -> Option<&'a Token<'a>> {
         self.tokens.get(self.at)
@@ -411,7 +305,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// The index of the bracket closing the one at `start`.
     fn matching(&self, start: usize, open: char, close: char) -> usize {
         let mut depth = 0i32;
 
@@ -430,10 +323,6 @@ impl<'a> Scanner<'a> {
         self.tokens.len().saturating_sub(1)
     }
 
-    /// Steps over a class's generics, `extends` and `implements` clauses.
-    ///
-    /// Returns the index of the body's `{`, or `None` for a class that ends
-    /// in `;` (an ambient `declare class Foo;`) and so has no body.
     fn class_header_tail(&mut self) -> Option<usize> {
         let mut depth = 0i32;
 
@@ -454,8 +343,6 @@ impl<'a> Scanner<'a> {
         None
     }
 
-    /// Whether the cursor sits at the start of a method's signature: `(` for
-    /// an ordinary method, `<` for a generic one.
     fn at_method_start(&self) -> bool {
         matches!(
             self.peek().map(|token| token.kind),
@@ -463,9 +350,8 @@ impl<'a> Scanner<'a> {
         )
     }
 
-    /// Skips a decorator: `@Name`, `@ns.Name`, or `@Name(args)`.
     fn skip_decorator(&mut self) {
-        self.bump(); // '@'
+        self.bump();
         loop {
             match self.peek().map(|token| token.kind) {
                 Some(Kind::Ident(_)) | Some(Kind::Punct('.')) => self.bump(),
@@ -478,8 +364,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Skips a method's (or accessor's) generics, parameters, return type and
-    /// body - or, for an ambient/overload signature, its trailing `;`.
     fn skip_member_tail(&mut self, close: usize) {
         if self
             .peek()
@@ -510,8 +394,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Skips a field's optional `?`/`!`, optional `: Type`, optional
-    /// `= default`, and its trailing `;`/`,` if there is one.
     fn skip_field_tail(&mut self, close: usize) {
         if matches!(
             self.peek().map(|token| token.kind),
@@ -541,11 +423,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Skips a type expression, tracking `(){}[]<>` depth, until a `stop`
-    /// character at depth zero or the enclosing class body's own `close`.
-    ///
-    /// The type is never inspected - `CYCLONE_FIELD(TYPE)` already said what
-    /// goes on the wire - only stepped over.
     fn skip_type_until(&mut self, close: usize, stop: &[char]) {
         let mut depth = 0i32;
 
@@ -564,9 +441,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Skips a default-value expression, tracking `(){}[]` depth only - not
-    /// `<>`, which a comparison inside the expression (`a < b`) would
-    /// otherwise miscount as a bracket.
     fn skip_value_until(&mut self, close: usize, stop: &[char]) {
         let mut depth = 0i32;
 
@@ -581,15 +455,12 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Skips from the bracket at the cursor to just past its match.
     fn skip_balanced(&mut self, open: char, close: char) {
         let start = self.at;
         self.at = self.matching(start, open, close) + 1;
     }
 }
 
-/// Splits a directive's text into its name and, if it has any, its raw
-/// `(...)` argument text.
 fn split_directive(text: &str) -> (&str, Args<'_>) {
     let name_end = text
         .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
@@ -607,20 +478,11 @@ fn split_directive(text: &str) -> (&str, Args<'_>) {
 }
 
 enum Args<'a> {
-    /// No `(...)` at all: `// CYCLONE_MODEL`.
     None,
-    /// An opening `(` with no matching `)` on the same line.
     Malformed,
-    /// A matched `(...)`, holding what was between the parentheses.
     Some(&'a str),
 }
 
-/// Parses `CYCLONE_CODEC(...)`'s arguments: zero or more comma-separated,
-/// single- or double-quoted codec names.
-///
-/// # Errors
-///
-/// An argument that is not a quoted string, or a quoted, empty codec name.
 fn parse_codec_args(body: &str) -> Result<Vec<String>, String> {
     let mut seen: Vec<String> = Vec::new();
     let mut out = Vec::new();
@@ -655,10 +517,6 @@ fn parse_codec_args(body: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Drops repeats, keeping the order the source wrote - the same policy
-/// [`crate::parser::rust::dedupe`] applies, and for the same reason: a codec
-/// named twice would otherwise generate the same type twice, a guaranteed
-/// compile error rather than a schema question.
 fn dedupe(mut names: Vec<String>) -> Vec<String> {
     let mut seen = Vec::with_capacity(names.len());
     names.retain(|name| {
@@ -671,9 +529,6 @@ fn dedupe(mut names: Vec<String>) -> Vec<String> {
     names
 }
 
-/// Keywords that may sit between a class member's annotations and its name -
-/// visibility, mutability and declaration modifiers, none of which affect
-/// whether it is a field or a method.
 fn is_member_modifier(word: &str) -> bool {
     matches!(
         word,
@@ -689,8 +544,6 @@ fn is_member_modifier(word: &str) -> bool {
     )
 }
 
-// =================================================================== the lexer
-
 #[derive(Debug, Clone, Copy)]
 struct Token<'a> {
     kind: Kind<'a>,
@@ -700,11 +553,8 @@ struct Token<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind<'a> {
     Ident(&'a str),
-    /// A `// CYCLONE_...` line comment, holding the text after `//`.
     Directive(&'a str),
     Punct(char),
-    /// A string, template literal, or numeric literal. Never meaningful
-    /// here, only stepped over.
     Other,
 }
 
@@ -717,12 +567,6 @@ impl<'a> Token<'a> {
     }
 }
 
-/// Splits TypeScript or JavaScript source into tokens.
-///
-/// Every comment is dropped except one shape: a line comment whose trimmed
-/// content starts with `CYCLONE_` becomes a [`Kind::Directive`] token instead
-/// of being discarded - the same treatment [`crate::parser::go::lex`] gives
-/// `//cyclone:model`.
 fn lex(text: &str) -> Vec<Token<'_>> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
@@ -742,7 +586,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // `//` to end of line.
         if byte == b'/' && bytes.get(at + 1) == Some(&b'/') {
             let content_start = at + 2;
             while at < bytes.len() && bytes[at] != b'\n' {
@@ -758,7 +601,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // `/* ... */` - does not nest in TypeScript/JavaScript.
         if byte == b'/' && bytes.get(at + 1) == Some(&b'*') {
             at += 2;
             while at < bytes.len() && !(bytes[at] == b'*' && bytes.get(at + 1) == Some(&b'/')) {
@@ -771,7 +613,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // `"..."` and `'...'`, with backslash escapes.
         if byte == b'"' || byte == b'\'' {
             let quote = byte;
             at += 1;
@@ -789,8 +630,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // A template literal. `${...}` interpolation is not parsed - see the
-        // module docs' known gap.
         if byte == b'`' {
             at += 1;
             while at < bytes.len() && bytes[at] != b'`' {

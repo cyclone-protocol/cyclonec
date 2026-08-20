@@ -1,55 +1,8 @@
-//! C source → [`Model`]s.
-//!
-//! Reads `CYCLONE_MODEL` / `CYCLONE_CODEC(...)` / `CYCLONE_FIELD(TYPE)` -
-//! the same three macros [`super::cpp`] reads, from the same shared header
-//! (RFC-0001 SS6.5's "no dependency of its own"), each expanding to nothing
-//! so an annotated struct compiles unchanged on any C toolchain whether or
-//! not `cyclonec` ever runs over it:
-//!
-//! ```text
-//! CYCLONE_MODEL
-//! CYCLONE_CODEC("edge", "unity")
-//! struct DeviceState {
-//!     CYCLONE_FIELD(u32)
-//!     CYCLONE_CODEC("edge", "unity")
-//!     uint32_t Id;
-//! };
-//! ```
-//!
-//! # What plain C does not have
-//!
-//! This scanner is [`super::cpp`]'s minus everything C has no syntax for at
-//! all: no `class` (only `struct`), no `namespace` (so no
-//! `namespace_name` here - see [`super::cpp::namespace_name`] for why C++
-//! needed one and [`super::c`]'s own module docs, and [`super::generator::c`]
-//! for what a flat, namespace-less language means for the generator), no
-//! access specifiers (`public:` is not a C token), no templates, and no raw
-//! string literals. What is left is smaller than [`super::cpp`]'s scanner,
-//! not a restriction of it: every construct it still handles - a base type's
-//! `<...>`/`[...]` nesting, a brace initializer, a bitfield's trailing
-//! `: width` - is stepped over exactly the way [`super::cpp`] and
-//! [`super::csharp`] already do, because a C struct field can still be any
-//! of those shapes even though C has nothing this scanner needs to recognise
-//! by name to do it.
-//!
-//! # Scope
-//!
-//! A model is a top-level `struct`; a nested type is not specially
-//! recognised, matching every other backend's scanner.
-
 use std::path::Path;
 
 use crate::model::{Field, Model};
 use crate::parser::Error;
 
-/// Extracts every `CYCLONE_MODEL` model from `text`.
-///
-/// # Errors
-///
-/// Only what stops generation: a `CYCLONE_FIELD()` with no wire type inside
-/// its parentheses, or a `CYCLONE_FIELD` / `CYCLONE_CODEC` marker sitting on
-/// a function instead of a field. Source that does not compile for any
-/// other reason is the C compiler's to report.
 pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     let tokens = lex(text);
     Scanner {
@@ -60,27 +13,17 @@ pub fn parse(path: &Path, text: &str) -> Result<Vec<Model>, Error> {
     .file()
 }
 
-// ============================================================== the scanner
-
 struct Scanner<'a> {
     path: &'a Path,
     tokens: &'a [Token<'a>],
     at: usize,
 }
 
-/// The Cyclone markers collected so far, waiting for the declaration they
-/// precede.
 #[derive(Default)]
 struct Pending {
-    /// Whether a `CYCLONE_MODEL` has been seen (top-level scanning only).
     model: bool,
-    /// `CYCLONE_FIELD(TYPE)`, and the type if its parentheses were not empty
-    /// (member scanning only).
     field_type: Option<Option<String>>,
-    /// Every string from every `CYCLONE_CODEC(...)`, in order.
     codecs: Vec<String>,
-    /// The line the first Cyclone marker was on. `0` means "none yet" - every
-    /// real line number is at least `1`.
     line: usize,
 }
 
@@ -98,7 +41,6 @@ impl Pending {
 }
 
 impl<'a> Scanner<'a> {
-    /// Walks a file, collecting models declared at the top level.
     fn file(&mut self) -> Result<Vec<Model>, Error> {
         let mut models = Vec::new();
         let mut pending = Pending::default();
@@ -127,9 +69,6 @@ impl<'a> Scanner<'a> {
                     pending.clear();
                 }
 
-                // A keyword that starts a different kind of declaration ends
-                // the run of markers, so a `CYCLONE_MODEL` on an enum is not
-                // inherited by the next struct.
                 Kind::Ident(word) if is_boundary_keyword(word) => {
                     self.bump();
                     pending.clear();
@@ -149,9 +88,6 @@ impl<'a> Scanner<'a> {
         Ok(models)
     }
 
-    /// Reads a `CYCLONE_CODEC(...)` invocation, adding its codec names to
-    /// `pending`. Not followed by `(` at all - a definition this scanner does
-    /// not need to understand - is left alone rather than treated as ours.
     fn codec_directive(&mut self, pending: &mut Pending) -> Result<(), Error> {
         let line = self.tokens[self.at].line;
         if pending.line == 0 {
@@ -179,7 +115,6 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
-    /// Reads a `CYCLONE_FIELD(TYPE)` invocation into `pending.field_type`.
     fn field_directive(&mut self, pending: &mut Pending) -> Result<(), Error> {
         let line = self.tokens[self.at].line;
         if pending.line == 0 {
@@ -209,15 +144,12 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
-    /// Reads a `struct` declaration, returning it if it is a model.
     fn type_declaration(&mut self, pending: &mut Pending) -> Result<Option<Model>, Error> {
         let Some(name) = self.peek().and_then(Token::ident) else {
             return Ok(None);
         };
         self.bump();
 
-        // A type nothing marks is somebody else's. It must not become an
-        // error just because it shares a file with a model.
         let is_model = pending.model;
 
         let body = self.skip_to_body();
@@ -243,10 +175,6 @@ impl<'a> Scanner<'a> {
         Ok(Some(model))
     }
 
-    /// Reads the annotated members out of a `struct` body.
-    ///
-    /// `open` is the index of the body's `{`; the cursor is left past its
-    /// `}`.
     fn members(&mut self, open: usize) -> Result<Vec<Field>, Error> {
         let close = self.matching(open, '{', '}');
         self.at = open + 1;
@@ -289,8 +217,6 @@ impl<'a> Scanner<'a> {
 
                     if !pending.is_empty() {
                         match pending.field_type.take() {
-                            // Told the field is on the wire, not told what to
-                            // write for it.
                             Some(None) => {
                                 return Err(self.error(
                                     line,
@@ -303,9 +229,6 @@ impl<'a> Scanner<'a> {
                                 codecs: dedupe(std::mem::take(&mut pending.codecs)),
                                 line,
                             }),
-                            // `CYCLONE_CODEC(...)` with no `CYCLONE_FIELD(...)`
-                            // names a codec for a field the generator does not
-                            // know is on the wire at all.
                             None if !pending.codecs.is_empty() => {
                                 return Err(self.error(
                                     line,
@@ -319,9 +242,6 @@ impl<'a> Scanner<'a> {
 
                     pending.clear();
                 }
-                // Defensive: every other arm above is guaranteed to advance
-                // `self.at`. This one is reached on debris `declaration_end`
-                // could not name a member from - guarantee progress anyway.
                 DeclarationEnd::EndOfBody => {
                     if self.at < close {
                         self.bump();
@@ -334,11 +254,6 @@ impl<'a> Scanner<'a> {
         Ok(fields)
     }
 
-    /// Scans a declaration from the current position, stopping at the token
-    /// that reveals what kind of member it is.
-    ///
-    /// `(` at depth `0` is always read as a function declaration starting - a
-    /// plain field's C host type cannot itself contain one.
     fn declaration_end(&mut self, close: usize) -> DeclarationEnd {
         let mut depth = 0i32;
         let mut last_ident = None;
@@ -353,11 +268,6 @@ impl<'a> Scanner<'a> {
                 Kind::Punct('(') if depth == 0 => {
                     return DeclarationEnd::Function;
                 }
-                // A bitfield's `: width` or a plain field's `[N]` array
-                // suffix does not change which identifier named the member -
-                // only `<...>`/`[...]` nesting depth is tracked here, exactly
-                // as `super::cpp` and `super::csharp` already do for their
-                // own generics/array suffixes.
                 Kind::Punct('<') | Kind::Punct('[') => {
                     depth += 1;
                     self.bump();
@@ -387,9 +297,6 @@ impl<'a> Scanner<'a> {
         DeclarationEnd::EndOfBody
     }
 
-    /// Skips from a member's name to just past the end of its declaration:
-    /// past `;`, or past a bitfield's `: width ;`, or past a brace
-    /// initializer (`{0}`) and any trailing `;`.
     fn skip_member_tail(&mut self, close: usize) {
         while self.at < close {
             match self.tokens[self.at].kind {
@@ -413,8 +320,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    // ------------------------------------------------------------- movement
-
     fn peek(&self) -> Option<&'a Token<'a>> {
         self.tokens.get(self.at)
     }
@@ -431,9 +336,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Steps to a `struct`'s body. Returns the index of its `{`, or `None`
-    /// for a `;`-terminated forward declaration, which has no members to
-    /// read.
     fn skip_to_body(&mut self) -> Option<usize> {
         while let Some(token) = self.peek() {
             match token.kind {
@@ -454,7 +356,6 @@ impl<'a> Scanner<'a> {
         self.at = self.matching(self.at, open, close) + 1;
     }
 
-    /// The index of the bracket closing the one at `start`.
     fn matching(&self, start: usize, open: char, close: char) -> usize {
         let mut depth = 0i32;
 
@@ -474,19 +375,12 @@ impl<'a> Scanner<'a> {
     }
 }
 
-/// What a member declaration turned out to be, once the scanner reached the
-/// token that reveals it.
 enum DeclarationEnd {
-    /// A function - `(` at depth 0.
     Function,
-    /// A field, named by the identifier at `name_index`.
     Member { name_index: usize },
-    /// The body ended before a member could be identified.
     EndOfBody,
 }
 
-/// The string content of a token sequence that is exactly one string literal,
-/// ignoring surrounding whitespace-equivalent tokens there are none of.
 fn string_literal(tokens: &[Token<'_>]) -> Option<String> {
     match tokens {
         [Token {
@@ -497,9 +391,6 @@ fn string_literal(tokens: &[Token<'_>]) -> Option<String> {
     }
 }
 
-/// Joins a `CYCLONE_FIELD(...)` argument's tokens back into the text the user
-/// wrote: `Array < u32 >` becomes `Array<u32>`. The result is handed to the
-/// IR as a name to resolve, not as something this module analyses.
 fn render(tokens: &[Token<'_>]) -> String {
     let mut out = String::new();
     for token in tokens {
@@ -512,7 +403,6 @@ fn render(tokens: &[Token<'_>]) -> String {
     out
 }
 
-/// Splits a token slice on commas that are not inside brackets.
 fn split_top_level<'a, 'b>(tokens: &'b [Token<'a>]) -> Vec<&'b [Token<'a>]> {
     let mut parts = Vec::new();
     let mut depth = 0i32;
@@ -537,8 +427,6 @@ fn split_top_level<'a, 'b>(tokens: &'b [Token<'a>]) -> Vec<&'b [Token<'a>]> {
     parts
 }
 
-/// Drops repeats, keeping the order the source wrote. See the identical
-/// helper in [`crate::parser::rust`].
 fn dedupe(mut names: Vec<String>) -> Vec<String> {
     let mut seen = Vec::with_capacity(names.len());
     names.retain(|name| {
@@ -551,23 +439,10 @@ fn dedupe(mut names: Vec<String>) -> Vec<String> {
     names
 }
 
-/// Keywords that start a declaration `CYCLONE_MODEL`/`CYCLONE_CODEC` cannot
-/// attach to, and so end a run of pending markers.
-///
-/// `typedef` is deliberately *not* here, unlike `super::cpp`'s equivalent
-/// list: `CYCLONE_MODEL \n typedef struct Player { ... } Player;` is a
-/// legitimate, common way to spell a C model, and `typedef` sits between the
-/// markers and the `struct` keyword the scanner is actually watching for.
-/// Nothing is lost by not treating it as a boundary - a `typedef` that never
-/// leads to a `struct` still loses its pending markers at the next `;`, the
-/// same as any other declaration this scanner does not recognise.
 fn is_boundary_keyword(word: &str) -> bool {
     matches!(word, "enum" | "union" | "extern")
 }
 
-// ================================================================= the lexer
-
-/// One token, borrowed from the source.
 #[derive(Debug, Clone, Copy)]
 struct Token<'a> {
     kind: Kind<'a>,
@@ -577,11 +452,8 @@ struct Token<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind<'a> {
     Ident(&'a str),
-    /// A string literal's contents - decoded enough to read a codec name,
-    /// which is the only thing a string ever holds here.
     Str(&'a str),
     Punct(char),
-    /// A numeric or character literal. Never meaningful here, only skipped.
     Other,
 }
 
@@ -594,13 +466,6 @@ impl<'a> Token<'a> {
     }
 }
 
-/// Splits C source into tokens.
-///
-/// Comments, whitespace and preprocessor directives are dropped: none of them
-/// can carry a Cyclone marker, and all of them can carry a `{` or `(` that
-/// would otherwise be counted. `#if` blocks are not evaluated - a model
-/// behind one is read either way, which is safer than guessing which branch a
-/// build takes.
 fn lex(text: &str) -> Vec<Token<'_>> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
@@ -639,11 +504,6 @@ fn lex(text: &str) -> Vec<Token<'_>> {
             continue;
         }
 
-        // A preprocessor directive runs to end of line - `#include`,
-        // `#pragma once`, `#define`, `#ifdef`, and so on. `CYCLONE_MODEL`
-        // itself never starts with `#`: it is an ordinary macro
-        // *invocation*, indistinguishable in the token stream from any other
-        // identifier until this scanner recognises its spelling.
         if byte == b'#' {
             while at < bytes.len() && bytes[at] != b'\n' {
                 at += 1;

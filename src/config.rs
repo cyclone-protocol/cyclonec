@@ -1,51 +1,16 @@
-//! `cyclone.toml` - the two paths, and one option.
-//!
-//! ```toml
-//! src = "src"
-//! out = "generated"
-//! model_path = "crate::models"        # optional
-//! validate_message_fingerprint = false
-//! ```
-//!
-//! A command-line flag always wins over the file: the file says what a project
-//! normally does, and a flag says what this invocation is doing instead.
-//!
-//! This reads the subset of TOML those three lines need and no more. `src` may
-//! also be a list, and keys may sit under a `[cyclone]` table for projects that
-//! would rather keep them out of the top level. Anything else in the file is
-//! skipped rather than rejected, so a `cyclone.toml` that grows a section for
-//! some future tool does not stop this one from starting.
-
 use std::path::{Path, PathBuf};
 
-/// The file name, looked for in the project root.
 pub const FILE_NAME: &str = "cyclone.toml";
 
-/// What `cyclone.toml` said.
 #[derive(Debug, Default, Clone)]
 pub struct Config {
-    /// Directories (or files) to scan. Every file found must be one
-    /// language (`.rs`, `.go`, `.cs`, `.gd`, `.hpp`/`.cpp`/`.cc`/`.cxx`
-    /// (C++), or `.c`/`.h` (C)), never a mix.
     pub src: Vec<PathBuf>,
-    /// Where generated source goes.
     pub out: Option<PathBuf>,
-    /// Where a generated codec reaches the models: a Rust module path, a Go
-    /// import path, or a C#/C++ namespace. No effect on GDScript or C -
-    /// GDScript because every model's own `class_name` is already reachable
-    /// project-wide, C because it has no namespace to begin with.
     pub model_path: Option<String>,
-    /// Whether generated frames carry `[MessageId][MessageFingerprint]`.
     pub validate_message_fingerprint: Option<bool>,
 }
 
 impl Config {
-    /// Reads `cyclone.toml` from `directory`, or returns the empty config if
-    /// there is none.
-    ///
-    /// # Errors
-    ///
-    /// The file exists but cannot be read, or holds a value of the wrong shape.
     pub fn load(directory: &Path) -> Result<Config, String> {
         let path = directory.join(FILE_NAME);
         if !path.exists() {
@@ -76,7 +41,6 @@ fn parse(text: &str) -> Result<Config, String> {
             continue;
         }
 
-        // Only the top level and a `[cyclone]` table are ours.
         if table.as_deref().is_some_and(|name| name != "cyclone") {
             continue;
         }
@@ -119,7 +83,6 @@ fn parse(text: &str) -> Result<Config, String> {
     Ok(config)
 }
 
-/// A `#` outside a string starts a comment.
 fn strip_comment(line: &str) -> &str {
     let mut in_string = false;
     for (index, character) in line.char_indices() {

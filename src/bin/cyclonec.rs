@@ -1,5 +1,3 @@
-//! `cyclonec` - generate, compare, and gate.
-
 use std::process::{Command, ExitCode};
 
 use cyclonec::cli::{self, CiArgs, CompatArgs, GenerateArgs};
@@ -42,13 +40,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// `cyclonec generate` - read source, say what changed, write the tree.
-///
-/// The compatibility report is a **warning**. Breaking a schema on a branch is
-/// a decision a developer is allowed to make, and a generator that refused
-/// would only teach them to pass a flag that turns the check off for good.
-/// `cyclonec ci` is where it becomes an error, because that is where the other
-/// end of the wire is somebody else's running code.
 fn run_generate(arguments: &GenerateArgs) -> Result<ExitCode, String> {
     let options = Options::resolve(&arguments.paths)?;
     let plan = generate::plan(&options)?;
@@ -65,8 +56,6 @@ fn run_generate(arguments: &GenerateArgs) -> Result<ExitCode, String> {
         );
     }
 
-    // The previous run's artifact, if there is one. It decides nothing about
-    // what gets generated - only what gets said about it.
     if let Ok(text) = std::fs::read_to_string(options.schema_path()) {
         match schema::from_json(&text) {
             Ok(previous) => {
@@ -104,14 +93,6 @@ fn run_generate(arguments: &GenerateArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `cyclonec generate --watch` - generate once, then keep doing it.
-///
-/// Deliberately its own function rather than a branch inside `run_generate`:
-/// the two share `Options::resolve`, but nothing past that - watch mode never
-/// prints the previous run's compatibility report on every save (noisy for
-/// no reason mid-edit; `cyclonec generate` on its own remains the place for
-/// that), and this way `--watch`'s presence can never change what
-/// `run_generate` itself does when it is absent.
 fn run_watch(arguments: &GenerateArgs) -> Result<ExitCode, String> {
     let options = Options::resolve(&arguments.paths)?;
     watch::run(
@@ -119,24 +100,16 @@ fn run_watch(arguments: &GenerateArgs) -> Result<ExitCode, String> {
         arguments.quiet,
         watch::DEFAULT_POLL_INTERVAL,
         watch::DEFAULT_SETTLE_INTERVAL,
-        // No signal handler to install: this loop is synchronous and single
-        // threaded, so the OS's own default disposition for SIGINT/SIGTERM -
-        // terminate the process - already leaves nothing running in the
-        // background. `should_stop` exists for callers (tests, chiefly) that
-        // want a controlled stop instead of an external signal.
         || false,
     )?;
     Ok(ExitCode::SUCCESS)
 }
 
-/// `cyclonec compat` - two schemas, one verdict.
 fn run_compat(arguments: &CompatArgs) -> Result<ExitCode, String> {
     let base = read_schema(&arguments.base)?;
     let head = match &arguments.head {
         Some(path) => read_schema(path)?,
         None => {
-            // No `--head`: compare against what source says right now, which is
-            // the question worth asking before anything has been committed.
             let options = Options::resolve(&arguments.paths)?;
             generate::plan(&options)?.schema
         }
@@ -154,22 +127,10 @@ fn run_compat(arguments: &CompatArgs) -> Result<ExitCode, String> {
     })
 }
 
-/// `cyclonec ci` - what a pull request needs, in the order it needs it.
-///
-/// 1. the committed `schema.json` still describes the source it was generated
-///    from - otherwise every later comparison is against fiction;
-/// 2. the **target branch's** `schema.json`, read out of git rather than out of
-///    the working tree;
-/// 3. the two compared, and a breaking change is exit 1.
-///
-/// The target branch is always given. A baseline hard-coded to `main` is how a
-/// repository that merges into `develop` gets a green check that compared a
-/// branch against itself.
 fn run_ci(arguments: &CiArgs) -> Result<ExitCode, String> {
     let options = Options::resolve(&arguments.paths)?;
     let plan = generate::plan(&options)?;
 
-    // ---------------------------------------------- 1. the schema is current
     let path = options.schema_path();
     let committed = std::fs::read_to_string(&path).map_err(|error| {
         format!(
@@ -191,7 +152,6 @@ fn run_ci(arguments: &CiArgs) -> Result<ExitCode, String> {
         println!("✓ {} matches the source", generate::display(&path));
     }
 
-    // ------------------------------------------- 2. the target branch's copy
     let Some(text) = git_show(&arguments.base_ref, schema::PATH)? else {
         println!(
             "{}:{} does not exist - the target branch has no schema yet, so there is nothing \
@@ -206,7 +166,6 @@ fn run_ci(arguments: &CiArgs) -> Result<ExitCode, String> {
     let base = schema::from_json(&text)
         .map_err(|problem| format!("{}:{}: {problem}", arguments.base_ref, schema::PATH))?;
 
-    // ------------------------------------------------------- 3. the verdict
     let report = compat::compare(&base, &plan.schema);
     if !arguments.quiet {
         println!("\n{} → this branch\n", arguments.base_ref);
@@ -234,7 +193,6 @@ fn read_schema(path: &std::path::Path) -> Result<Schema, String> {
     schema::from_json(&text).map_err(|problem| format!("{}: {problem}", generate::display(path)))
 }
 
-/// `git show <ref>:<path>`, or `None` if that ref has no such file.
 fn git_show(reference: &str, path: &str) -> Result<Option<String>, String> {
     let output = Command::new("git")
         .args(["show", &format!("{reference}:{path}")])
@@ -248,8 +206,6 @@ fn git_show(reference: &str, path: &str) -> Result<Option<String>, String> {
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // A missing file is an answer, not a failure: a branch that predates
-    // Cyclone has no schema, and everything on this one is new.
     if stderr.contains("does not exist") || stderr.contains("exists on disk, but not in") {
         return Ok(None);
     }

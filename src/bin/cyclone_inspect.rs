@@ -1,5 +1,3 @@
-//! `cyclone-inspect` - decode a packet through a named schema.
-
 use std::process::ExitCode;
 
 use cyclonec::inspect;

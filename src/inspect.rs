@@ -1,48 +1,23 @@
-//! `cyclone-inspect` - a packet, read through a schema.
-//!
-//! ```bash
-//! cyclone-inspect --schema .cyclone/schema.json --message Player --file packet.bin
-//! ```
-//!
-//! The schema is named, never guessed. A tool that inferred which message a
-//! buffer holds would be inventing the one thing Cyclone's wire format
-//! deliberately does not carry - there is no tag, no id, no length in front of
-//! a payload to infer from, and a plausible-looking wrong answer is worse than
-//! no answer.
-//!
-//! It decodes by exactly the rules a generated decoder follows, including
-//! RFC-0002 §9.1: a field the stream ended before is reported as absent, a
-//! field the stream ended inside is an error, and bytes past the last field are
-//! reported as a newer writer's and left alone.
-
 use std::path::PathBuf;
 
 use crate::fingerprint::Fingerprint;
 use crate::ir::{Message, Schema, WireType};
 
-/// Where the bytes come from.
 #[derive(Debug, Clone)]
 pub enum Input {
     File(PathBuf),
-    /// Hex digits, with any spacing: `64 00 00 00`, `0x64,0x00`, `64000000`.
     Hex(String),
 }
 
-/// What to inspect.
 #[derive(Debug, Clone)]
 pub struct Options {
     pub schema: PathBuf,
-    /// `Player`, or `Player.edge`.
     pub message: String,
-    /// Needed only when the model declares more than one codec and the message
-    /// was named without one.
     pub codec: Option<String>,
     pub input: Input,
-    /// A fingerprint the message is expected to have: `sha256:…` or `0x…`.
     pub expect: Option<String>,
 }
 
-/// The usage text.
 pub const USAGE: &str = "\
 cyclone-inspect - decode a Cyclone packet through a schema
 
@@ -65,11 +40,6 @@ EXAMPLES:
     cyclone-inspect --schema .cyclone/schema.json --message Player.edge --hex '64000000 0000 2841'
 ";
 
-/// Parses `cyclone-inspect`'s command line.
-///
-/// # Errors
-///
-/// A missing or unknown option, or no input.
 pub fn parse(
     argv: impl IntoIterator<Item = std::ffi::OsString>,
 ) -> Result<Option<Options>, String> {
@@ -123,12 +93,6 @@ pub fn parse(
     }))
 }
 
-/// Decodes the packet and renders the report.
-///
-/// # Errors
-///
-/// A schema that cannot be read, a message that is not in it, a packet that
-/// cannot be read, or a byte stream that does not satisfy the Specification.
 pub fn run(options: &Options) -> Result<String, String> {
     let text = std::fs::read_to_string(&options.schema)
         .map_err(|error| format!("{}: {error}", options.schema.display()))?;
@@ -151,7 +115,6 @@ pub fn run(options: &Options) -> Result<String, String> {
     render(&schema, message, &bytes)
 }
 
-/// Finds `Player`, `Player.edge`, or `Player` + `--codec edge`.
 fn find_message<'a>(
     schema: &'a Schema,
     name: &str,
@@ -221,7 +184,6 @@ fn check_fingerprint(message: &Message, expected: &str) -> Result<(), String> {
     ))
 }
 
-/// Hex digits with any spacing, `0x` prefixes and commas.
 fn from_hex(text: &str) -> Result<Vec<u8>, String> {
     let digits: String = text
         .replace("0x", " ")
@@ -243,8 +205,6 @@ fn from_hex(text: &str) -> Result<Vec<u8>, String> {
         })
         .collect()
 }
-
-// ================================================================= the decoder
 
 struct Cursor<'a> {
     bytes: &'a [u8],
@@ -270,7 +230,6 @@ impl<'a> Cursor<'a> {
     }
 }
 
-/// Decodes `bytes` as `message` and renders the report.
 fn render(schema: &Schema, message: &Message, bytes: &[u8]) -> Result<String, String> {
     let mut out = String::with_capacity(1024);
     out.push_str(&format!("{}\n", message.name));
@@ -309,7 +268,6 @@ fn render(schema: &Schema, message: &Message, bytes: &[u8]) -> Result<String, St
     Ok(out)
 }
 
-/// Every field of one message, at one nesting depth.
 fn fields(
     out: &mut String,
     schema: &Schema,
@@ -321,8 +279,6 @@ fn fields(
     let pad = "  ".repeat(depth);
 
     for field in &message.fields {
-        // RFC-0002 §9.1: nothing left at a field boundary means the writer's
-        // model stopped here, and this field never arrived.
         if cursor.remaining() == 0 {
             out.push_str(&format!(
                 "{pad}{:width$} : {} = absent (the stream ended before this field)\n",
@@ -390,8 +346,6 @@ fn fields(
     Ok(())
 }
 
-/// One blank line between fields, and never two - a nested model's own last
-/// field already left one behind it.
 fn blank_line(out: &mut String) {
     if !out.ends_with("\n\n") {
         out.push('\n');
@@ -415,7 +369,6 @@ fn read_u32(cursor: &mut Cursor<'_>, what: &str) -> Result<u32, String> {
     Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
-/// One primitive, decoded and formatted.
 fn value(cursor: &mut Cursor<'_>, ty: &WireType) -> Result<String, String> {
     Ok(match ty {
         WireType::Bool => match cursor.take(1, "a bool")?[0] {
@@ -475,21 +428,16 @@ fn read_u64(cursor: &mut Cursor<'_>, what: &str) -> Result<u64, String> {
     ]))
 }
 
-/// A float, printed so that a whole number still looks like a float and `-0.0`
-/// still looks like `-0.0`.
 fn format_float(value: f64) -> String {
     if value.is_nan() {
         return "NaN".to_owned();
     }
     if value == value.trunc() && value.is_finite() && value.abs() < 1e15 {
-        // `{:.1}` keeps the sign of -0.0, which is a distinct value on the wire
-        // (RFC-0002 §2.3) and worth being able to see.
         return format!("{value:.1}");
     }
     format!("{value}")
 }
 
-/// Bytes as `64 00 00 00`, shortened in the middle if there are many.
 fn hex(bytes: &[u8]) -> String {
     const MAX: usize = 16;
     let shown: Vec<String> = bytes

@@ -1,37 +1,3 @@
-//! `handshake.gd` - the fingerprints, generated.
-//!
-//! The GDScript counterpart of [`super::handshake`], [`super::go_handshake`]
-//! and [`super::csharp_handshake`] - same contract, same safety property:
-//!
-//! ```text
-//! peer schema fingerprint == ours               -> Current    accept
-//! a message both ends know, fingerprints differ -> Reject     disconnect
-//! otherwise                                      -> Outdated   accept
-//! ```
-//!
-//! `cyclonec_old` never had a GDScript handshake generator at all - this is
-//! new. It follows [`super::csharp_handshake`]'s shape more than
-//! [`super::go_handshake`]'s: GDScript, like C#, has no package-level
-//! `const` outside a type, so every fingerprint constant, the message table,
-//! and the compare function all live inside one `class_name CycloneHandshake`
-//! wrapper - the same "everything through one file's own global name"
-//! constraint [`super::gdscript`]'s module docs describe.
-//!
-//! [`CycloneMessage`], [`CyclonePeerMessage`] and the verdict itself
-//! (`CycloneHandshake.Verdict`) are declared *nested* inside that one
-//! wrapper, rather than as sibling top-level types the way they are in Go and
-//! C#: a `.gd` file gets exactly one `class_name`, so there is no second slot
-//! to declare a second globally-reachable type in. A caller reaches the
-//! verdict as `CycloneHandshake.Verdict.CURRENT`, and a message as
-//! `CycloneHandshake.CycloneMessage` - one extra qualifier, and the whole of
-//! the difference this constraint makes.
-//!
-//! GDScript has no exceptions (see [`super::gdscript_runtime`]), so
-//! `read_envelope` returns `[CycloneMessage, error]`, the same two-slot
-//! convention every read in this project's GDScript runtime already uses,
-//! rather than throwing the way [`super::csharp_handshake`]'s
-//! `CycloneReadEnvelope` does.
-
 use std::collections::BTreeMap;
 
 use crate::ir::Schema;
@@ -39,16 +5,8 @@ use crate::model::screaming_snake_case;
 
 use super::gdscript::{u32_literal, u64_literal};
 
-/// The file name, relative to the output directory.
 pub const FILE_NAME: &str = "handshake.gd";
 
-/// Renders `handshake.gd`.
-///
-/// # Errors
-///
-/// Two constants that would be spelled the same - a model named `PlayerEdge`
-/// beside a `Player` with an `edge` codec. Rare, mechanical, and far better
-/// reported here than as a redeclaration error in the user's project.
 pub fn handshake_file(
     schema: &Schema,
     validate_message_fingerprint: bool,
@@ -109,8 +67,6 @@ pub fn handshake_file(
 
     out.push_str(TYPES);
 
-    // Sorted by id, so a peer's table and ours can be compared without either
-    // side sorting first.
     let mut messages: Vec<_> = schema.messages().collect();
     messages.sort_by_key(|message| message.id);
 
@@ -140,7 +96,6 @@ pub fn handshake_file(
     Ok(out)
 }
 
-/// `Player` + `edge` → `PLAYER_EDGE`.
 fn message_constant(model: &str, codec: &str) -> String {
     format!(
         "{}_{}",
@@ -149,7 +104,6 @@ fn message_constant(model: &str, codec: &str) -> String {
     )
 }
 
-/// Two constants may not be spelled the same.
 fn check_constant_names(schema: &Schema) -> Result<(), String> {
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
 
@@ -173,9 +127,6 @@ fn check_constant_names(schema: &Schema) -> Result<(), String> {
     Ok(())
 }
 
-/// The message descriptor and the verdict enum, nested inside
-/// `CycloneHandshake` because a `.gd` file has exactly one `class_name` to
-/// declare - see the module docs.
 const TYPES: &str = "\
 # One message: its id, its name, and the fingerprint of its wire contract.
 class CycloneMessage:
@@ -211,9 +162,6 @@ enum Verdict {
 
 ";
 
-/// The lookup and compare functions, identical in every generated
-/// `handshake.gd` - appended right after the generated `MESSAGES` table they
-/// read.
 const HANDSHAKE: &str = r####"
 # The message with this id, if this schema declares it - null otherwise.
 static func message_by_id(id: int) -> CycloneMessage:
@@ -245,7 +193,6 @@ static func compare(peer_schema_fingerprint: int, peer_messages: Array) -> Verdi
 	return Verdict.OUTDATED
 "####;
 
-/// The optional per-frame envelope, when `validate_message_fingerprint` is on.
 const ENVELOPE: &str = r####"# ==========================================================================
 # Per-frame validation - validate_message_fingerprint = true.
 #
@@ -309,7 +256,6 @@ static func read_envelope(reader: CycloneRuntime.Reader) -> Array:
 	return [known, null]
 "####;
 
-/// What stands in for the envelope when it is off.
 const ENVELOPE_OFF: &str = "\
 # Per-frame message validation is off, so no envelope is generated and no
 # frame carries one. Turn it on in cyclone.toml:
