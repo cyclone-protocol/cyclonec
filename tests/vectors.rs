@@ -118,6 +118,36 @@ fn the_fingerprints_are_unchanged() {
             Some(format!("0x{:08X}", message.id).as_str()),
             "{name}'s message id changed"
         );
+
+        let prefixes = expected
+            .get("prefixes")
+            .and_then(Json::as_array)
+            .unwrap_or_else(|| panic!("{name} has no `prefixes`"));
+        let computed: Vec<String> = message
+            .prefixes
+            .iter()
+            .map(|prefix| prefix.tagged())
+            .collect();
+        let pinned: Vec<&str> = prefixes.iter().filter_map(Json::as_str).collect();
+        assert_eq!(
+            pinned.len(),
+            computed.len(),
+            "{name}'s field count changed: {pinned:?}"
+        );
+        for (index, (pinned, computed)) in pinned.iter().zip(&computed).enumerate() {
+            assert_eq!(
+                *pinned,
+                computed,
+                "{name}'s prefix over its first {} fields changed",
+                index + 1
+            );
+        }
+
+        assert_eq!(
+            prefixes.last().and_then(Json::as_str),
+            Some(message.fingerprint.tagged().as_str()),
+            "{name}'s last prefix is not its fingerprint"
+        );
     }
 }
 

@@ -70,6 +70,21 @@ pub fn handshake_file(
                 "    public const ulong {constant}Fingerprint = {};\n",
                 hex64(message.fingerprint.u64())
             ));
+            out.push_str(&format!(
+                "    /// <summary>One fingerprint per prefix of <c>{}</c>: entry <c>k-1</c>\n\
+                 \x20   /// covers its first <c>k</c> fields. The last entry is\n\
+                 \x20   /// <see cref=\"{constant}Fingerprint\"/>. Never sent whole - a peer\n\
+                 \x20   /// sends its field count and its last entry, and the two sides\n\
+                 \x20   /// compare at <c>min</c> of the two counts (RFC-0002 9.1).</summary>\n",
+                message.name
+            ));
+            out.push_str(&format!(
+                "    public static readonly ulong[] {constant}Prefixes = new ulong[]\n    {{\n"
+            ));
+            for prefix in &message.prefixes {
+                out.push_str(&format!("        {},\n", hex64(prefix.u64())));
+            }
+            out.push_str("    };\n");
         }
         out.push('\n');
     }
@@ -84,7 +99,8 @@ pub fn handshake_file(
     for message in &messages {
         let constant = message_constant(&message.model, &message.codec);
         out.push_str(&format!(
-            "        new CycloneMessage({constant}MessageId, \"{}\", {constant}Fingerprint),\n",
+            "        new CycloneMessage({constant}MessageId, \"{}\", {constant}Fingerprint, \
+             {constant}Prefixes),\n",
             message.name
         ));
     }
@@ -150,25 +166,32 @@ public readonly struct CycloneMessage
     public readonly string Name;
     /// <summary>Changes whenever the message's fields do.</summary>
     public readonly ulong Fingerprint;
+    /// <summary>One entry per field: entry <c>k-1</c> covers the first <c>k</c> fields.
+    /// The last entry is <see cref="Fingerprint"/>. Stays local; only its length and its
+    /// last entry ever go on the wire.</summary>
+    public readonly ulong[] Prefixes;
 
-    public CycloneMessage(uint id, string name, ulong fingerprint)
+    public CycloneMessage(uint id, string name, ulong fingerprint, ulong[] prefixes)
     {
         Id = id;
         Name = name;
         Fingerprint = fingerprint;
+        Prefixes = prefixes;
     }
 }
 
-/// <summary>One entry of a peer's (id, fingerprint) table - what
+/// <summary>One entry of a peer's (id, field count, fingerprint) table - what
 /// <see cref="Handshake.CycloneMessages"/> is on its side.</summary>
 public readonly struct CyclonePeerMessage
 {
     public readonly uint Id;
+    public readonly uint FieldCount;
     public readonly ulong Fingerprint;
 
-    public CyclonePeerMessage(uint id, ulong fingerprint)
+    public CyclonePeerMessage(uint id, uint fieldCount, ulong fingerprint)
     {
         Id = id;
+        FieldCount = fieldCount;
         Fingerprint = fingerprint;
     }
 }
@@ -178,12 +201,31 @@ public enum CycloneHandshake
 {
     /// <summary>The same schema, exactly.</summary>
     Current,
-    /// <summary>A different schema, but no message both ends know disagrees. One side is
-    /// older; every message they share is byte-identical.</summary>
+    /// <summary>A different schema, but every message both ends know agrees on the
+    /// fields both ends carry. Safe to proceed.</summary>
     Outdated,
-    /// <summary>A message both ends know has two different shapes. There is nothing to
-    /// negotiate: disconnect.</summary>
+    /// <summary>Both ends put different fields at an index both of them carry. There is
+    /// nothing to negotiate: disconnect.</summary>
     Reject,
+    /// <summary>Not decidable from the peer's table alone - at least one message needs
+    /// the extra exchange described on <see cref="CycloneMessageCheck.NeedPrefix"/>.</summary>
+    NeedMore,
+}
+
+/// <summary>What one of the peer's messages means for this schema's message of the same
+/// id.</summary>
+public enum CycloneMessageCheck
+{
+    /// <summary>Either this schema does not declare the message at all, or the fields
+    /// both ends carry agree. Nothing to do.</summary>
+    Match,
+    /// <summary>Both ends put different fields at an index both of them carry.</summary>
+    Reject,
+    /// <summary>Undecidable from what the peer sent: the peer has more fields than this
+    /// schema, so the answer lives at an index only the peer can produce. Ask it for its
+    /// prefix fingerprint at the reported field count, then compare the reply against
+    /// <c>CyclonePrefix</c> for the same id.</summary>
+    NeedPrefix,
 }
 
 "####;
@@ -213,9 +255,72 @@ const HANDSHAKE: &str = r####"
         return null;
     }
 
-    /// <summary>Compares a peer's fingerprints against this schema's.</summary>
-    /// <remarks><paramref name="peerMessages"/> is only worth sending when the schema
-    /// fingerprints already differ.</remarks>
+    /// <summary>This schema's fingerprint for the first <paramref name="fieldCount"/>
+    /// fields of a message, or <c>null</c> if it does not declare that message or does
+    /// not have that many fields. <paramref name="fieldCount"/> counts from 1; 0 is the
+    /// empty prefix and has no fingerprint because it always matches.</summary>
+    public static ulong? CyclonePrefix(uint id, uint fieldCount)
+    {
+        var message = CycloneMessageById(id);
+        if (!message.HasValue || fieldCount == 0 || fieldCount > message.Value.Prefixes.Length)
+        {
+            return null;
+        }
+        return message.Value.Prefixes[fieldCount - 1];
+    }
+
+    /// <summary>Compares one of the peer's messages against this schema's.</summary>
+    /// <remarks>This is RFC-0002 9.1's prefix test: the two are compatible when the
+    /// shorter field list is an exact prefix of the longer one, so the comparison happens
+    /// at the smaller of the two field counts. <paramref name="askFor"/> is the field
+    /// count to ask the peer about, and is only meaningful for
+    /// <see cref="CycloneMessageCheck.NeedPrefix"/>.</remarks>
+    public static CycloneMessageCheck CycloneCheckMessage(
+        uint id,
+        uint peerFieldCount,
+        ulong peerFingerprint,
+        out uint askFor)
+    {
+        askFor = 0;
+        var message = CycloneMessageById(id);
+        if (!message.HasValue)
+        {
+            // Not a message this schema declares, so it is never exchanged.
+            return CycloneMessageCheck.Match;
+        }
+        var known = message.Value;
+        uint localFieldCount = (uint)known.Prefixes.Length;
+
+        if (peerFingerprint == known.Fingerprint)
+        {
+            return CycloneMessageCheck.Match;
+        }
+        if (peerFieldCount == 0 || localFieldCount == 0)
+        {
+            // The empty field list is a prefix of everything.
+            return CycloneMessageCheck.Match;
+        }
+        if (peerFieldCount == localFieldCount)
+        {
+            // Same length, different content - a prefix of equal length would
+            // have to be equality, and it is not.
+            return CycloneMessageCheck.Reject;
+        }
+        if (peerFieldCount < localFieldCount)
+        {
+            // The peer's own fingerprint already is the value at the shared index.
+            return known.Prefixes[peerFieldCount - 1] == peerFingerprint
+                ? CycloneMessageCheck.Match
+                : CycloneMessageCheck.Reject;
+        }
+        askFor = localFieldCount;
+        return CycloneMessageCheck.NeedPrefix;
+    }
+
+    /// <summary>Compares a peer's whole message table against this schema's.</summary>
+    /// <remarks>A <see cref="CycloneHandshake.NeedMore"/> result means at least one
+    /// message needs the extra round; walk the table with
+    /// <see cref="CycloneCheckMessage"/> to find which ones.</remarks>
     public static CycloneHandshake CycloneHandshakeCompare(
         ulong peerSchemaFingerprint,
         System.Collections.Generic.IEnumerable<CyclonePeerMessage> peerMessages)
@@ -225,18 +330,22 @@ const HANDSHAKE: &str = r####"
             return CycloneHandshake.Current;
         }
 
+        bool needMore = false;
         foreach (var peer in peerMessages)
         {
-            var known = CycloneMessageById(peer.Id);
-            if (known.HasValue && known.Value.Fingerprint != peer.Fingerprint)
+            switch (CycloneCheckMessage(peer.Id, peer.FieldCount, peer.Fingerprint, out _))
             {
-                // A message both ends know, with two shapes. Every other
-                // message could match and it would still be unsafe to speak.
-                return CycloneHandshake.Reject;
+                case CycloneMessageCheck.Reject:
+                    // One mismatch decides the whole session. Every other message
+                    // could agree and it would still be unsafe to speak.
+                    return CycloneHandshake.Reject;
+                case CycloneMessageCheck.NeedPrefix:
+                    needMore = true;
+                    break;
             }
         }
 
-        return CycloneHandshake.Outdated;
+        return needMore ? CycloneHandshake.NeedMore : CycloneHandshake.Outdated;
     }
 "####;
 

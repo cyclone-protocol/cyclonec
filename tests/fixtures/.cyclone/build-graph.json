@@ -94,7 +94,7 @@
     {
       "path": "src/generated/handshake.rs",
       "kind": "handshake",
-      "sha256": "b4189aca1b9f8a324503fd4642fced4a47a8a21120138b6d2663e5a67c4c7927"
+      "sha256": "e4b1633c8973f345a05b2029d681655c550167457c4dff3057e349a4d56baf71"
     },
     {
       "path": "src/generated/mod.rs",

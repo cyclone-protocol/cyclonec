@@ -63,6 +63,17 @@ pub fn handshake_file(
                 "export const {constant}_FINGERPRINT: bigint = {}n;\n",
                 hex64(message.fingerprint.u64())
             ));
+            out.push_str(&format!(
+                "/**\n                 * One fingerprint per prefix of `{}`: entry `k-1` covers its first `k`\n                 * fields. The last entry is `{constant}_FINGERPRINT`. Never sent whole -\n                 * a peer sends its field count and its last entry, and the two sides\n                 * compare at `min` of the two counts (RFC-0002 §9.1).\n                 */\n",
+                message.name
+            ));
+            out.push_str(&format!(
+                "export const {constant}_PREFIXES: readonly bigint[] = [\n"
+            ));
+            for prefix in &message.prefixes {
+                out.push_str(&format!("    {}n,\n", hex64(prefix.u64())));
+            }
+            out.push_str("];\n");
         }
         out.push('\n');
     }
@@ -77,7 +88,8 @@ pub fn handshake_file(
     for message in &messages {
         let constant = message_constant(&message.model, &message.codec);
         out.push_str(&format!(
-            "    {{ id: {constant}_MESSAGE_ID, name: \"{}\", fingerprint: {constant}_FINGERPRINT }},\n",
+            "    {{ id: {constant}_MESSAGE_ID, name: \"{}\", fingerprint: {constant}_FINGERPRINT, \
+             prefixes: {constant}_PREFIXES }},\n",
             message.name
         ));
     }
@@ -138,6 +150,12 @@ export interface CycloneMessage {
     readonly name: string;
     /** Changes whenever the message's fields do. */
     readonly fingerprint: bigint;
+    /**
+     * One entry per field: entry `k-1` covers the first `k` fields. The last
+     * entry is `fingerprint`. Stays local; only its length and its last entry
+     * ever go on the wire.
+     */
+    readonly prefixes: readonly bigint[];
 }
 
 ";
@@ -148,15 +166,38 @@ export enum CycloneHandshake {
     /** The same schema, exactly. */
     Current,
     /**
-     * A different schema, but no message both ends know disagrees. One side
-     * is older; every message they share is byte-identical.
+     * A different schema, but every message both ends know agrees on the
+     * fields both ends carry. Safe to proceed.
      */
     Outdated,
     /**
-     * A message both ends know has two different shapes. There is nothing
-     * to negotiate: disconnect.
+     * Both ends put different fields at an index both of them carry. There
+     * is nothing to negotiate: disconnect.
      */
     Reject,
+    /**
+     * Not decidable from the peer's table alone - at least one message needs
+     * the extra exchange described on `CycloneMessageCheck.NeedPrefix`.
+     */
+    NeedMore,
+}
+
+/** What one of the peer's messages means for this schema's message of the same id. */
+export enum CycloneMessageCheck {
+    /**
+     * Either this schema does not declare the message at all, or the fields
+     * both ends carry agree. Nothing to do.
+     */
+    Match,
+    /** Both ends put different fields at an index both of them carry. */
+    Reject,
+    /**
+     * Undecidable from what the peer sent: the peer has more fields than this
+     * schema, so the answer lives at an index only the peer can produce. Ask
+     * it for its prefix fingerprint at the reported field count, then compare
+     * the reply against `cyclonePrefix` for the same id.
+     */
+    NeedPrefix,
 }
 
 /** The message with this id, if this schema declares it. */
@@ -176,30 +217,92 @@ export function cycloneMessage(id: number): CycloneMessage | undefined {
 }
 
 /**
- * Compares a peer's fingerprints against this schema's.
+ * This schema's fingerprint for the first `fieldCount` fields of a message,
+ * or `undefined` if it does not declare that message or does not have that
+ * many fields. `fieldCount` counts from 1; 0 is the empty prefix and has no
+ * fingerprint because it always matches.
+ */
+export function cyclonePrefix(id: number, fieldCount: number): bigint | undefined {
+    const message = cycloneMessage(id);
+    if (message === undefined || fieldCount === 0) {
+        return undefined;
+    }
+    return message.prefixes[fieldCount - 1];
+}
+
+/**
+ * Compares one of the peer's messages against this schema's.
  *
- * `peerMessages` is the peer's `(id, fingerprint)` table - what
- * `CYCLONE_MESSAGES` is on its side. It is only worth sending when the
- * schema fingerprints already differ.
+ * `peerFieldCount` and `peerFingerprint` are what the peer declares for this
+ * id. This is RFC-0002 §9.1's prefix test: the two are compatible when the
+ * shorter field list is an exact prefix of the longer one, so the comparison
+ * happens at `min(peerFieldCount, local field count)`. `askFor` is the field
+ * count to ask the peer about, and is only meaningful for `NeedPrefix`.
+ */
+export function cycloneCheckMessage(
+    id: number,
+    peerFieldCount: number,
+    peerFingerprint: bigint,
+): { readonly check: CycloneMessageCheck; readonly askFor: number } {
+    const known = cycloneMessage(id);
+    if (known === undefined) {
+        // Not a message this schema declares, so it is never exchanged.
+        return { check: CycloneMessageCheck.Match, askFor: 0 };
+    }
+    const localFieldCount = known.prefixes.length;
+
+    if (peerFingerprint === known.fingerprint) {
+        return { check: CycloneMessageCheck.Match, askFor: 0 };
+    }
+    if (peerFieldCount === 0 || localFieldCount === 0) {
+        // The empty field list is a prefix of everything.
+        return { check: CycloneMessageCheck.Match, askFor: 0 };
+    }
+    if (peerFieldCount === localFieldCount) {
+        // Same length, different content - a prefix of equal length would have
+        // to be equality, and it is not.
+        return { check: CycloneMessageCheck.Reject, askFor: 0 };
+    }
+    if (peerFieldCount < localFieldCount) {
+        // The peer's own fingerprint already is the value at the shared index.
+        const local = known.prefixes[peerFieldCount - 1];
+        return local === peerFingerprint
+            ? { check: CycloneMessageCheck.Match, askFor: 0 }
+            : { check: CycloneMessageCheck.Reject, askFor: 0 };
+    }
+    return { check: CycloneMessageCheck.NeedPrefix, askFor: localFieldCount };
+}
+
+/**
+ * Compares a peer's whole message table against this schema's.
+ *
+ * `peerMessages` is the peer's `(id, field count, fingerprint)` table - what
+ * `CYCLONE_MESSAGES` is on its side. A `NeedMore` result means at least one
+ * message needs the extra round; walk the table with `cycloneCheckMessage` to
+ * find which ones.
  */
 export function cycloneHandshake(
     peerSchemaFingerprint: bigint,
-    peerMessages: readonly (readonly [number, bigint])[],
+    peerMessages: readonly (readonly [number, number, bigint])[],
 ): CycloneHandshake {
     if (peerSchemaFingerprint === CYCLONE_SCHEMA_FINGERPRINT) {
         return CycloneHandshake.Current;
     }
 
-    for (const [id, fingerprint] of peerMessages) {
-        const known = cycloneMessage(id);
-        if (known !== undefined && known.fingerprint !== fingerprint) {
-            // A message both ends know, with two shapes. Every other message
-            // could match and it would still be unsafe to speak.
+    let needMore = false;
+    for (const [id, fieldCount, fingerprint] of peerMessages) {
+        const { check } = cycloneCheckMessage(id, fieldCount, fingerprint);
+        if (check === CycloneMessageCheck.Reject) {
+            // One mismatch decides the whole session. Every other message could
+            // agree and it would still be unsafe to speak.
             return CycloneHandshake.Reject;
+        }
+        if (check === CycloneMessageCheck.NeedPrefix) {
+            needMore = true;
         }
     }
 
-    return CycloneHandshake.Outdated;
+    return needMore ? CycloneHandshake.NeedMore : CycloneHandshake.Outdated;
 }
 ";
 

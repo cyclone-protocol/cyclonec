@@ -66,6 +66,18 @@ pub fn handshake_file(
                 "const {constant}Fingerprint uint64 = {}\n",
                 crate::schema::hex64(message.fingerprint.u64())
             ));
+            out.push_str(&format!(
+                "\n// {constant}Prefixes holds one fingerprint per prefix of {}: entry k-1\n\
+                 // covers its first k fields. The last entry is {constant}Fingerprint.\n\
+                 // Never sent whole - a peer sends its field count and its last entry, and\n\
+                 // the two sides compare at min of the two counts (RFC-0002 9.1).\n",
+                message.name
+            ));
+            out.push_str(&format!("var {constant}Prefixes = []uint64{{\n"));
+            for prefix in &message.prefixes {
+                out.push_str(&format!("\t{},\n", crate::schema::hex64(prefix.u64())));
+            }
+            out.push_str("}\n");
         }
         out.push('\n');
     }
@@ -82,7 +94,8 @@ pub fn handshake_file(
     for message in &messages {
         let constant = message_constant(&message.model, &message.codec);
         out.push_str(&format!(
-            "\t{{ID: {constant}MessageID, Name: {:?}, Fingerprint: {constant}Fingerprint}},\n",
+            "\t{{ID: {constant}MessageID, Name: {:?}, Fingerprint: {constant}Fingerprint, \
+             Prefixes: {constant}Prefixes}},\n",
             message.name
         ));
     }
@@ -142,6 +155,10 @@ type CycloneMessage struct {
 	Name string
 	// Fingerprint changes whenever the message's fields do.
 	Fingerprint uint64
+	// Prefixes holds one entry per field: entry k-1 covers the first k fields.
+	// The last entry is Fingerprint. Stays local; only its length and its last
+	// entry ever go on the wire.
+	Prefixes []uint64
 }
 
 ";
@@ -153,18 +170,41 @@ type CycloneHandshake int
 const (
 	// CycloneCurrent means the same schema, exactly.
 	CycloneCurrent CycloneHandshake = iota
-	// CycloneOutdated means a different schema, but no message both ends know
-	// disagrees. One side is older; every message they share is byte-identical.
+	// CycloneOutdated means a different schema, but every message both ends
+	// know agrees on the fields both ends carry. Safe to proceed.
 	CycloneOutdated
-	// CycloneReject means a message both ends know has two different shapes.
-	// There is nothing to negotiate: disconnect.
+	// CycloneReject means both ends put different fields at an index both of
+	// them carry. There is nothing to negotiate: disconnect.
 	CycloneReject
+	// CycloneNeedMore means the peer's table alone does not decide it - at
+	// least one message needs the extra exchange described on
+	// CycloneNeedPrefix.
+	CycloneNeedMore
 )
 
-// CyclonePeerMessage is one entry of a peer's (id, fingerprint) table - what
-// CycloneMessages is on its side.
+// CycloneMessageCheck is what one of the peer's messages means for this
+// schema's message of the same id.
+type CycloneMessageCheck int
+
+const (
+	// CycloneMatch means either this schema does not declare the message at
+	// all, or the fields both ends carry agree.
+	CycloneMatch CycloneMessageCheck = iota
+	// CycloneMessageReject means both ends put different fields at an index
+	// both of them carry.
+	CycloneMessageReject
+	// CycloneNeedPrefix means undecidable from what the peer sent: the peer has
+	// more fields than this schema, so the answer lives at an index only the
+	// peer can produce. Ask it for its prefix fingerprint at the returned field
+	// count, then compare the reply against CyclonePrefix for the same id.
+	CycloneNeedPrefix
+)
+
+// CyclonePeerMessage is one entry of a peer's (id, field count, fingerprint)
+// table - what CycloneMessages is on its side.
 type CyclonePeerMessage struct {
 	ID          uint32
+	FieldCount  uint32
 	Fingerprint uint64
 }
 
@@ -186,24 +226,77 @@ func CycloneMessageByID(id uint32) (CycloneMessage, bool) {
 	return CycloneMessage{}, false
 }
 
-// CycloneHandshakeCompare compares a peer's fingerprints against this
-// schema's. peerMessages is only worth sending when the schema fingerprints
-// already differ.
+// CyclonePrefix returns this schema's fingerprint for the first fieldCount
+// fields of a message, and whether it exists. fieldCount counts from 1; 0 is
+// the empty prefix and has no fingerprint because it always matches.
+func CyclonePrefix(id uint32, fieldCount uint32) (uint64, bool) {
+	message, ok := CycloneMessageByID(id)
+	if !ok || fieldCount == 0 || int(fieldCount) > len(message.Prefixes) {
+		return 0, false
+	}
+	return message.Prefixes[fieldCount-1], true
+}
+
+// CycloneCheckMessage compares one of the peer's messages against this
+// schema's. peerFieldCount and peerFingerprint are what the peer declares for
+// this id. This is RFC-0002 9.1's prefix test: the two are compatible when the
+// shorter field list is an exact prefix of the longer one, so the comparison
+// happens at min(peerFieldCount, local field count). The second return value
+// is the field count to ask the peer about, and is only meaningful for
+// CycloneNeedPrefix.
+func CycloneCheckMessage(id uint32, peerFieldCount uint32, peerFingerprint uint64) (CycloneMessageCheck, uint32) {
+	known, ok := CycloneMessageByID(id)
+	if !ok {
+		// Not a message this schema declares, so it is never exchanged.
+		return CycloneMatch, 0
+	}
+	localFieldCount := uint32(len(known.Prefixes))
+
+	if peerFingerprint == known.Fingerprint {
+		return CycloneMatch, 0
+	}
+	if peerFieldCount == 0 || localFieldCount == 0 {
+		// The empty field list is a prefix of everything.
+		return CycloneMatch, 0
+	}
+	if peerFieldCount == localFieldCount {
+		// Same length, different content - a prefix of equal length would have
+		// to be equality, and it is not.
+		return CycloneMessageReject, 0
+	}
+	if peerFieldCount < localFieldCount {
+		// The peer's own fingerprint already is the value at the shared index.
+		if known.Prefixes[peerFieldCount-1] == peerFingerprint {
+			return CycloneMatch, 0
+		}
+		return CycloneMessageReject, 0
+	}
+	return CycloneNeedPrefix, localFieldCount
+}
+
+// CycloneHandshakeCompare compares a peer's whole message table against this
+// schema's. A CycloneNeedMore result means at least one message needs the
+// extra round; walk the table with CycloneCheckMessage to find which ones.
 func CycloneHandshakeCompare(peerSchemaFingerprint uint64, peerMessages []CyclonePeerMessage) CycloneHandshake {
 	if peerSchemaFingerprint == CycloneSchemaFingerprint {
 		return CycloneCurrent
 	}
 
+	needMore := false
 	for _, peer := range peerMessages {
-		if known, ok := CycloneMessageByID(peer.ID); ok {
-			if known.Fingerprint != peer.Fingerprint {
-				// A message both ends know, with two shapes. Every other
-				// message could match and it would still be unsafe to speak.
-				return CycloneReject
-			}
+		switch check, _ := CycloneCheckMessage(peer.ID, peer.FieldCount, peer.Fingerprint); check {
+		case CycloneMessageReject:
+			// One mismatch decides the whole session. Every other message could
+			// agree and it would still be unsafe to speak.
+			return CycloneReject
+		case CycloneNeedPrefix:
+			needMore = true
 		}
 	}
 
+	if needMore {
+		return CycloneNeedMore
+	}
 	return CycloneOutdated
 }
 "####;

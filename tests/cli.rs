@@ -499,11 +499,23 @@ fn compat_exits_one_on_a_breaking_change_and_zero_otherwise() {
         stdout(&output)
     );
 
-    // Deleting is not.
     rewrite_player(
         &directory,
         "    #[network(u32)]\n    #[codec(edge)]\n    pub id: u32,\n\n\
              #[network(f32)]\n    #[codec(edge)]\n    pub x: f32,\n",
+    );
+    let output = cyclonec(&directory, &["compat", "--base", "base.json"]);
+    assert!(output.status.success(), "{}", stdout(&output));
+    assert!(
+        stdout(&output).trim_end().ends_with("COMPATIBLE"),
+        "{}",
+        stdout(&output)
+    );
+
+    rewrite_player(
+        &directory,
+        "    #[network(u32)]\n    #[codec(edge)]\n    pub id: u32,\n\n\
+             #[network(f32)]\n    #[codec(edge)]\n    pub y: f32,\n",
     );
     let output = cyclonec(&directory, &["compat", "--base", "base.json"]);
     assert!(!output.status.success());

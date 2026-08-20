@@ -65,6 +65,28 @@ pub fn message(model: &Model, codec: &str, schema: &[Model]) -> Fingerprint {
     Fingerprint::of(&canonical_message(model, codec, schema))
 }
 
+pub fn message_prefixes(model: &Model, codec: &str, schema: &[Model]) -> Vec<Fingerprint> {
+    const END: &str = "end\n";
+
+    let mut text = String::with_capacity(256);
+    let mut stack = Vec::new();
+    text.push_str(HEADER);
+    text.push_str("message ");
+    text.push_str(&model.name);
+    text.push('.');
+    text.push_str(codec);
+    text.push('\n');
+
+    let mut prefixes = Vec::new();
+    for (index, field) in model.fields_in(codec).enumerate() {
+        write_field(&mut text, index, field, Some(codec), schema, &mut stack);
+        text.push_str(END);
+        prefixes.push(Fingerprint::of(&text));
+        text.truncate(text.len() - END.len());
+    }
+    prefixes
+}
+
 pub fn model(model: &Model, schema: &[Model]) -> Fingerprint {
     Fingerprint::of(&canonical_model(model, schema))
 }
@@ -244,6 +266,77 @@ mod tests {
             canonical_message(model, "edge", &schema.models),
             "cyclone-fingerprint/2\nmessage Player.edge\nfield 0 id u32\nfield 1 x f32\nend\n"
         );
+    }
+
+    fn player_prefixes(fields: Vec<Field>) -> Vec<u64> {
+        player(fields)
+            .message("Player.edge")
+            .expect("message")
+            .prefixes
+            .iter()
+            .map(Fingerprint::u64)
+            .collect()
+    }
+
+    #[test]
+    fn the_last_prefix_is_the_message_fingerprint() {
+        let fields = vec![field("id", "u32"), field("x", "f32"), field("y", "f32")];
+        let message = player(fields)
+            .message("Player.edge")
+            .expect("message")
+            .clone();
+
+        assert_eq!(message.prefixes.len(), message.fields.len());
+        assert_eq!(message.prefixes.last(), Some(&message.fingerprint));
+    }
+
+    #[test]
+    fn a_prefix_is_the_fingerprint_of_the_truncated_message() {
+        let three = player_prefixes(vec![
+            field("id", "u32"),
+            field("x", "f32"),
+            field("y", "f32"),
+        ]);
+        let two = player_prefixes(vec![field("id", "u32"), field("x", "f32")]);
+        let one = player_prefixes(vec![field("id", "u32")]);
+
+        assert_eq!(three[..2], two[..]);
+        assert_eq!(three[..1], one[..]);
+    }
+
+    #[test]
+    fn the_prefix_chain_is_pinned() {
+        assert_eq!(
+            player_prefixes(vec![
+                field("id", "u32"),
+                field("x", "f32"),
+                field("y", "f32")
+            ]),
+            vec![0x61B0FCFAB53A875E, 0xF1ED8779E2A4A35D, 0x1C6D09808C8BA4CA]
+        );
+    }
+
+    #[test]
+    fn a_reorder_diverges_at_the_first_moved_field() {
+        let straight = player_prefixes(vec![
+            field("id", "u32"),
+            field("x", "f32"),
+            field("y", "f32"),
+        ]);
+        let swapped = player_prefixes(vec![
+            field("id", "u32"),
+            field("y", "f32"),
+            field("x", "f32"),
+        ]);
+
+        assert_eq!(straight[0], swapped[0]);
+        assert_ne!(straight[1], swapped[1]);
+        assert_ne!(straight[2], swapped[2]);
+    }
+
+    #[test]
+    fn an_empty_message_has_an_empty_chain() {
+        assert!(player_prefixes(Vec::new()).is_empty());
     }
 
     #[test]

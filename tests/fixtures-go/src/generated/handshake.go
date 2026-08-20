@@ -2,7 +2,7 @@
 // DO NOT EDIT MANUALLY
 // fingerprint: sha256:b496f724e6b520cee1d5bbe6c9bd2744a1b160fcf473033b50867b355e4b2ca8
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-20T06:05:20Z
+// generated-at: 2026-08-20T11:03:23Z
 //
 // Every fingerprint this schema publishes, and the handshake that compares
 // them. Generated - never edit, and never hand-maintain a copy of these
@@ -24,10 +24,28 @@ const PlayerFingerprint uint64 = 0x3523311D4BC56EC0
 const PlayerEdgeMessageID uint32 = 0x432AB486
 const PlayerEdgeFingerprint uint64 = 0x1C6D09808C8BA4CA
 
+// PlayerEdgePrefixes holds one fingerprint per prefix of Player.edge: entry k-1
+// covers its first k fields. The last entry is PlayerEdgeFingerprint.
+// Never sent whole - a peer sends its field count and its last entry, and
+// the two sides compare at min of the two counts (RFC-0002 9.1).
+var PlayerEdgePrefixes = []uint64{
+	0x61B0FCFAB53A875E,
+	0xF1ED8779E2A4A35D,
+	0x1C6D09808C8BA4CA,
+}
+
 // PlayerUnityMessageID and PlayerUnityFingerprint are `Player.unity` - the wire
 // contract `PlayerUnityCodec` encodes and decodes.
 const PlayerUnityMessageID uint32 = 0xF4716BBE
 const PlayerUnityFingerprint uint64 = 0xEB9B9E10AA5F77DC
+
+// PlayerUnityPrefixes holds one fingerprint per prefix of Player.unity: entry k-1
+// covers its first k fields. The last entry is PlayerUnityFingerprint.
+// Never sent whole - a peer sends its field count and its last entry, and
+// the two sides compare at min of the two counts (RFC-0002 9.1).
+var PlayerUnityPrefixes = []uint64{
+	0xEB9B9E10AA5F77DC,
+}
 
 // PlayerInfoFingerprint is `PlayerInfo`, as declared - every annotated field, whatever codec
 // it joined.
@@ -38,6 +56,14 @@ const PlayerInfoFingerprint uint64 = 0xA1C3DBA922185BBD
 const PlayerInfoEdgeMessageID uint32 = 0xC61DC711
 const PlayerInfoEdgeFingerprint uint64 = 0xB34420C17EEFD973
 
+// PlayerInfoEdgePrefixes holds one fingerprint per prefix of PlayerInfo.edge: entry k-1
+// covers its first k fields. The last entry is PlayerInfoEdgeFingerprint.
+// Never sent whole - a peer sends its field count and its last entry, and
+// the two sides compare at min of the two counts (RFC-0002 9.1).
+var PlayerInfoEdgePrefixes = []uint64{
+	0xB34420C17EEFD973,
+}
+
 // TeamFingerprint is `Team`, as declared - every annotated field, whatever codec
 // it joined.
 const TeamFingerprint uint64 = 0x89D79F98B706B2FA
@@ -46,6 +72,17 @@ const TeamFingerprint uint64 = 0x89D79F98B706B2FA
 // contract `TeamEdgeCodec` encodes and decodes.
 const TeamEdgeMessageID uint32 = 0x90AF7FE0
 const TeamEdgeFingerprint uint64 = 0x8289219A2DCF8EB9
+
+// TeamEdgePrefixes holds one fingerprint per prefix of Team.edge: entry k-1
+// covers its first k fields. The last entry is TeamEdgeFingerprint.
+// Never sent whole - a peer sends its field count and its last entry, and
+// the two sides compare at min of the two counts (RFC-0002 9.1).
+var TeamEdgePrefixes = []uint64{
+	0x25C018E05DA44041,
+	0xCC979A85A705EDB0,
+	0x3E437E5F61702D71,
+	0x8289219A2DCF8EB9,
+}
 
 // CycloneMessage is one message: its id, its name, and the fingerprint of its
 // wire contract.
@@ -56,14 +93,18 @@ type CycloneMessage struct {
 	Name string
 	// Fingerprint changes whenever the message's fields do.
 	Fingerprint uint64
+	// Prefixes holds one entry per field: entry k-1 covers the first k fields.
+	// The last entry is Fingerprint. Stays local; only its length and its last
+	// entry ever go on the wire.
+	Prefixes []uint64
 }
 
 // CycloneMessages is every message this schema declares, sorted by id.
 var CycloneMessages = []CycloneMessage{
-	{ID: PlayerEdgeMessageID, Name: "Player.edge", Fingerprint: PlayerEdgeFingerprint},
-	{ID: TeamEdgeMessageID, Name: "Team.edge", Fingerprint: TeamEdgeFingerprint},
-	{ID: PlayerInfoEdgeMessageID, Name: "PlayerInfo.edge", Fingerprint: PlayerInfoEdgeFingerprint},
-	{ID: PlayerUnityMessageID, Name: "Player.unity", Fingerprint: PlayerUnityFingerprint},
+	{ID: PlayerEdgeMessageID, Name: "Player.edge", Fingerprint: PlayerEdgeFingerprint, Prefixes: PlayerEdgePrefixes},
+	{ID: TeamEdgeMessageID, Name: "Team.edge", Fingerprint: TeamEdgeFingerprint, Prefixes: TeamEdgePrefixes},
+	{ID: PlayerInfoEdgeMessageID, Name: "PlayerInfo.edge", Fingerprint: PlayerInfoEdgeFingerprint, Prefixes: PlayerInfoEdgePrefixes},
+	{ID: PlayerUnityMessageID, Name: "Player.unity", Fingerprint: PlayerUnityFingerprint, Prefixes: PlayerUnityPrefixes},
 }
 
 // CycloneHandshake is what a peer's fingerprints mean for this one.
@@ -72,18 +113,41 @@ type CycloneHandshake int
 const (
 	// CycloneCurrent means the same schema, exactly.
 	CycloneCurrent CycloneHandshake = iota
-	// CycloneOutdated means a different schema, but no message both ends know
-	// disagrees. One side is older; every message they share is byte-identical.
+	// CycloneOutdated means a different schema, but every message both ends
+	// know agrees on the fields both ends carry. Safe to proceed.
 	CycloneOutdated
-	// CycloneReject means a message both ends know has two different shapes.
-	// There is nothing to negotiate: disconnect.
+	// CycloneReject means both ends put different fields at an index both of
+	// them carry. There is nothing to negotiate: disconnect.
 	CycloneReject
+	// CycloneNeedMore means the peer's table alone does not decide it - at
+	// least one message needs the extra exchange described on
+	// CycloneNeedPrefix.
+	CycloneNeedMore
 )
 
-// CyclonePeerMessage is one entry of a peer's (id, fingerprint) table - what
-// CycloneMessages is on its side.
+// CycloneMessageCheck is what one of the peer's messages means for this
+// schema's message of the same id.
+type CycloneMessageCheck int
+
+const (
+	// CycloneMatch means either this schema does not declare the message at
+	// all, or the fields both ends carry agree.
+	CycloneMatch CycloneMessageCheck = iota
+	// CycloneMessageReject means both ends put different fields at an index
+	// both of them carry.
+	CycloneMessageReject
+	// CycloneNeedPrefix means undecidable from what the peer sent: the peer has
+	// more fields than this schema, so the answer lives at an index only the
+	// peer can produce. Ask it for its prefix fingerprint at the returned field
+	// count, then compare the reply against CyclonePrefix for the same id.
+	CycloneNeedPrefix
+)
+
+// CyclonePeerMessage is one entry of a peer's (id, field count, fingerprint)
+// table - what CycloneMessages is on its side.
 type CyclonePeerMessage struct {
 	ID          uint32
+	FieldCount  uint32
 	Fingerprint uint64
 }
 
@@ -105,24 +169,77 @@ func CycloneMessageByID(id uint32) (CycloneMessage, bool) {
 	return CycloneMessage{}, false
 }
 
-// CycloneHandshakeCompare compares a peer's fingerprints against this
-// schema's. peerMessages is only worth sending when the schema fingerprints
-// already differ.
+// CyclonePrefix returns this schema's fingerprint for the first fieldCount
+// fields of a message, and whether it exists. fieldCount counts from 1; 0 is
+// the empty prefix and has no fingerprint because it always matches.
+func CyclonePrefix(id uint32, fieldCount uint32) (uint64, bool) {
+	message, ok := CycloneMessageByID(id)
+	if !ok || fieldCount == 0 || int(fieldCount) > len(message.Prefixes) {
+		return 0, false
+	}
+	return message.Prefixes[fieldCount-1], true
+}
+
+// CycloneCheckMessage compares one of the peer's messages against this
+// schema's. peerFieldCount and peerFingerprint are what the peer declares for
+// this id. This is RFC-0002 9.1's prefix test: the two are compatible when the
+// shorter field list is an exact prefix of the longer one, so the comparison
+// happens at min(peerFieldCount, local field count). The second return value
+// is the field count to ask the peer about, and is only meaningful for
+// CycloneNeedPrefix.
+func CycloneCheckMessage(id uint32, peerFieldCount uint32, peerFingerprint uint64) (CycloneMessageCheck, uint32) {
+	known, ok := CycloneMessageByID(id)
+	if !ok {
+		// Not a message this schema declares, so it is never exchanged.
+		return CycloneMatch, 0
+	}
+	localFieldCount := uint32(len(known.Prefixes))
+
+	if peerFingerprint == known.Fingerprint {
+		return CycloneMatch, 0
+	}
+	if peerFieldCount == 0 || localFieldCount == 0 {
+		// The empty field list is a prefix of everything.
+		return CycloneMatch, 0
+	}
+	if peerFieldCount == localFieldCount {
+		// Same length, different content - a prefix of equal length would have
+		// to be equality, and it is not.
+		return CycloneMessageReject, 0
+	}
+	if peerFieldCount < localFieldCount {
+		// The peer's own fingerprint already is the value at the shared index.
+		if known.Prefixes[peerFieldCount-1] == peerFingerprint {
+			return CycloneMatch, 0
+		}
+		return CycloneMessageReject, 0
+	}
+	return CycloneNeedPrefix, localFieldCount
+}
+
+// CycloneHandshakeCompare compares a peer's whole message table against this
+// schema's. A CycloneNeedMore result means at least one message needs the
+// extra round; walk the table with CycloneCheckMessage to find which ones.
 func CycloneHandshakeCompare(peerSchemaFingerprint uint64, peerMessages []CyclonePeerMessage) CycloneHandshake {
 	if peerSchemaFingerprint == CycloneSchemaFingerprint {
 		return CycloneCurrent
 	}
 
+	needMore := false
 	for _, peer := range peerMessages {
-		if known, ok := CycloneMessageByID(peer.ID); ok {
-			if known.Fingerprint != peer.Fingerprint {
-				// A message both ends know, with two shapes. Every other
-				// message could match and it would still be unsafe to speak.
-				return CycloneReject
-			}
+		switch check, _ := CycloneCheckMessage(peer.ID, peer.FieldCount, peer.Fingerprint); check {
+		case CycloneMessageReject:
+			// One mismatch decides the whole session. Every other message could
+			// agree and it would still be unsafe to speak.
+			return CycloneReject
+		case CycloneNeedPrefix:
+			needMore = true
 		}
 	}
 
+	if needMore {
+		return CycloneNeedMore
+	}
 	return CycloneOutdated
 }
 

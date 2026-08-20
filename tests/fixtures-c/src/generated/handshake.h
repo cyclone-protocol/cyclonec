@@ -2,7 +2,7 @@
 // DO NOT EDIT MANUALLY
 // fingerprint: sha256:6105d9d673b37e60f2d4620f1695ad4ae63d5cc596d1a41642c7387989abe7ba
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-20T06:05:20Z
+// generated-at: 2026-08-20T11:03:23Z
 //
 // Every fingerprint this schema publishes, and the handshake that compares
 // them. Generated - never edit, and never hand-maintain a copy of these
@@ -24,21 +24,61 @@ static const uint64_t PLAYER_FINGERPRINT = 0x78AE9C0220010285ULL;
 // `Player.edge` - the wire contract `PlayerEdgeCodec` encodes and decodes.
 static const uint32_t PLAYER_EDGE_MESSAGE_ID = 0x432AB486u;
 static const uint64_t PLAYER_EDGE_FINGERPRINT = 0xB6FB9CF5777C645BULL;
+// One fingerprint per prefix of `Player.edge`: entry `k-1` covers its first `k`
+// fields. The last entry is `PLAYER_EDGE_FINGERPRINT`. Never sent whole - a
+// peer sends its field count and its last entry, and the two sides compare
+// at `min` of the two counts (RFC-0002 9.1).
+static const uint64_t PLAYER_EDGE_PREFIXES[] = {
+    0x61B0FCFAB53A875EULL,
+    0xF1ED8779E2A4A35DULL,
+    0x1C6D09808C8BA4CAULL,
+    0x12A66E8671403E47ULL,
+    0xB6FB9CF5777C645BULL,
+};
+static const size_t PLAYER_EDGE_PREFIX_COUNT = sizeof(PLAYER_EDGE_PREFIXES) / sizeof(PLAYER_EDGE_PREFIXES[0]);
 // `Player.unity` - the wire contract `PlayerUnityCodec` encodes and decodes.
 static const uint32_t PLAYER_UNITY_MESSAGE_ID = 0xF4716BBEu;
 static const uint64_t PLAYER_UNITY_FINGERPRINT = 0xF03393ECB964B75DULL;
+// One fingerprint per prefix of `Player.unity`: entry `k-1` covers its first `k`
+// fields. The last entry is `PLAYER_UNITY_FINGERPRINT`. Never sent whole - a
+// peer sends its field count and its last entry, and the two sides compare
+// at `min` of the two counts (RFC-0002 9.1).
+static const uint64_t PLAYER_UNITY_PREFIXES[] = {
+    0xEB9B9E10AA5F77DCULL,
+    0xF03393ECB964B75DULL,
+};
+static const size_t PLAYER_UNITY_PREFIX_COUNT = sizeof(PLAYER_UNITY_PREFIXES) / sizeof(PLAYER_UNITY_PREFIXES[0]);
 
 // `PlayerInfo`, as declared - every annotated field, whatever codec it joined.
 static const uint64_t PLAYER_INFO_FINGERPRINT = 0xA1C3DBA922185BBDULL;
 // `PlayerInfo.edge` - the wire contract `PlayerInfoEdgeCodec` encodes and decodes.
 static const uint32_t PLAYER_INFO_EDGE_MESSAGE_ID = 0xC61DC711u;
 static const uint64_t PLAYER_INFO_EDGE_FINGERPRINT = 0xB34420C17EEFD973ULL;
+// One fingerprint per prefix of `PlayerInfo.edge`: entry `k-1` covers its first `k`
+// fields. The last entry is `PLAYER_INFO_EDGE_FINGERPRINT`. Never sent whole - a
+// peer sends its field count and its last entry, and the two sides compare
+// at `min` of the two counts (RFC-0002 9.1).
+static const uint64_t PLAYER_INFO_EDGE_PREFIXES[] = {
+    0xB34420C17EEFD973ULL,
+};
+static const size_t PLAYER_INFO_EDGE_PREFIX_COUNT = sizeof(PLAYER_INFO_EDGE_PREFIXES) / sizeof(PLAYER_INFO_EDGE_PREFIXES[0]);
 
 // `Team`, as declared - every annotated field, whatever codec it joined.
 static const uint64_t TEAM_FINGERPRINT = 0x89D79F98B706B2FAULL;
 // `Team.edge` - the wire contract `TeamEdgeCodec` encodes and decodes.
 static const uint32_t TEAM_EDGE_MESSAGE_ID = 0x90AF7FE0u;
 static const uint64_t TEAM_EDGE_FINGERPRINT = 0x8289219A2DCF8EB9ULL;
+// One fingerprint per prefix of `Team.edge`: entry `k-1` covers its first `k`
+// fields. The last entry is `TEAM_EDGE_FINGERPRINT`. Never sent whole - a
+// peer sends its field count and its last entry, and the two sides compare
+// at `min` of the two counts (RFC-0002 9.1).
+static const uint64_t TEAM_EDGE_PREFIXES[] = {
+    0x25C018E05DA44041ULL,
+    0xCC979A85A705EDB0ULL,
+    0x3E437E5F61702D71ULL,
+    0x8289219A2DCF8EB9ULL,
+};
+static const size_t TEAM_EDGE_PREFIX_COUNT = sizeof(TEAM_EDGE_PREFIXES) / sizeof(TEAM_EDGE_PREFIXES[0]);
 
 // One message: its id, its name, and the fingerprint of its wire contract.
 typedef struct CycloneMessage {
@@ -48,14 +88,19 @@ typedef struct CycloneMessage {
     const char *name;
     // Changes whenever the message's fields do.
     uint64_t fingerprint;
+    // One entry per field: entry `k-1` covers the first `k` fields. The last
+    // entry is `fingerprint`. Stays local; only its length and its last entry
+    // ever go on the wire. `NULL` when the message has no fields.
+    const uint64_t *prefixes;
+    size_t prefix_count;
 } CycloneMessage;
 
 // Every message this schema declares, sorted by id.
 static const CycloneMessage CYCLONE_MESSAGES[] = {
-    {PLAYER_EDGE_MESSAGE_ID, "Player.edge", PLAYER_EDGE_FINGERPRINT},
-    {TEAM_EDGE_MESSAGE_ID, "Team.edge", TEAM_EDGE_FINGERPRINT},
-    {PLAYER_INFO_EDGE_MESSAGE_ID, "PlayerInfo.edge", PLAYER_INFO_EDGE_FINGERPRINT},
-    {PLAYER_UNITY_MESSAGE_ID, "Player.unity", PLAYER_UNITY_FINGERPRINT},
+    {PLAYER_EDGE_MESSAGE_ID, "Player.edge", PLAYER_EDGE_FINGERPRINT, PLAYER_EDGE_PREFIXES, PLAYER_EDGE_PREFIX_COUNT},
+    {TEAM_EDGE_MESSAGE_ID, "Team.edge", TEAM_EDGE_FINGERPRINT, TEAM_EDGE_PREFIXES, TEAM_EDGE_PREFIX_COUNT},
+    {PLAYER_INFO_EDGE_MESSAGE_ID, "PlayerInfo.edge", PLAYER_INFO_EDGE_FINGERPRINT, PLAYER_INFO_EDGE_PREFIXES, PLAYER_INFO_EDGE_PREFIX_COUNT},
+    {PLAYER_UNITY_MESSAGE_ID, "Player.unity", PLAYER_UNITY_FINGERPRINT, PLAYER_UNITY_PREFIXES, PLAYER_UNITY_PREFIX_COUNT},
 };
 static const size_t CYCLONE_MESSAGES_COUNT = sizeof(CYCLONE_MESSAGES) / sizeof(CYCLONE_MESSAGES[0]);
 
@@ -63,18 +108,37 @@ static const size_t CYCLONE_MESSAGES_COUNT = sizeof(CYCLONE_MESSAGES) / sizeof(C
 typedef enum CycloneHandshake {
     // The same schema, exactly.
     CYCLONE_HANDSHAKE_CURRENT,
-    // A different schema, but no message both ends know disagrees. One side
-    // is older; every message they share is byte-identical.
+    // A different schema, but every message both ends know agrees on the
+    // fields both ends carry. Safe to proceed.
     CYCLONE_HANDSHAKE_OUTDATED,
-    // A message both ends know has two different shapes. There is nothing
-    // to negotiate: disconnect.
+    // Both ends put different fields at an index both of them carry. There is
+    // nothing to negotiate: disconnect.
     CYCLONE_HANDSHAKE_REJECT,
+    // Not decidable from the peer's table alone - at least one message needs
+    // the extra exchange described on CYCLONE_MESSAGE_NEED_PREFIX.
+    CYCLONE_HANDSHAKE_NEED_MORE,
 } CycloneHandshake;
 
-// One entry of a peer's (id, fingerprint) table - what `CYCLONE_MESSAGES` is
-// on its side.
+// What one of the peer's messages means for this schema's message of the
+// same id.
+typedef enum CycloneMessageCheck {
+    // Either this schema does not declare the message at all, or the fields
+    // both ends carry agree. Nothing to do.
+    CYCLONE_MESSAGE_MATCH,
+    // Both ends put different fields at an index both of them carry.
+    CYCLONE_MESSAGE_REJECT,
+    // Undecidable from what the peer sent: the peer has more fields than this
+    // schema, so the answer lives at an index only the peer can produce. Ask
+    // it for its prefix fingerprint at the reported field count, then compare
+    // the reply against `cyclone_prefix` for the same id.
+    CYCLONE_MESSAGE_NEED_PREFIX,
+} CycloneMessageCheck;
+
+// One entry of a peer's (id, field count, fingerprint) table - what
+// `CYCLONE_MESSAGES` is on its side.
 typedef struct CyclonePeerMessage {
     uint32_t id;
+    uint32_t field_count;
     uint64_t fingerprint;
 } CyclonePeerMessage;
 
@@ -96,11 +160,68 @@ static inline const CycloneMessage *cyclone_message(uint32_t id) {
     return NULL;
 }
 
-// Compares a peer's fingerprints against this schema's.
+// This schema's fingerprint for the first `field_count` fields of a message.
+// Writes it to `*out` and returns `true`, or returns `false` if this schema
+// does not declare the message or does not have that many fields.
+// `field_count` counts from 1; 0 is the empty prefix and has no fingerprint
+// because it always matches.
+static inline bool cyclone_prefix(uint32_t id, uint32_t field_count, uint64_t *out) {
+    const CycloneMessage *message = cyclone_message(id);
+    if (message == NULL || field_count == 0 || (size_t)field_count > message->prefix_count) {
+        return false;
+    }
+    *out = message->prefixes[field_count - 1];
+    return true;
+}
+
+// Compares one of the peer's messages against this schema's.
 //
-// `peer_messages`/`peer_messages_count` is the peer's (id, fingerprint)
-// table - what `CYCLONE_MESSAGES`/`CYCLONE_MESSAGES_COUNT` is on its side.
-// It is only worth sending when the schema fingerprints already differ.
+// `peer_field_count` and `peer_fingerprint` are what the peer declares for
+// this id. This is RFC-0002 9.1's prefix test: the two are compatible when the
+// shorter field list is an exact prefix of the longer one, so the comparison
+// happens at the smaller of the two field counts. `*ask_for` is the field
+// count to ask the peer about, and is only meaningful for
+// CYCLONE_MESSAGE_NEED_PREFIX.
+static inline CycloneMessageCheck cyclone_check_message(uint32_t id, uint32_t peer_field_count,
+                                                          uint64_t peer_fingerprint,
+                                                          uint32_t *ask_for) {
+    *ask_for = 0;
+    const CycloneMessage *known = cyclone_message(id);
+    if (known == NULL) {
+        // Not a message this schema declares, so it is never exchanged.
+        return CYCLONE_MESSAGE_MATCH;
+    }
+    uint32_t local_field_count = (uint32_t)known->prefix_count;
+
+    if (peer_fingerprint == known->fingerprint) {
+        return CYCLONE_MESSAGE_MATCH;
+    }
+    if (peer_field_count == 0 || local_field_count == 0) {
+        // The empty field list is a prefix of everything.
+        return CYCLONE_MESSAGE_MATCH;
+    }
+    if (peer_field_count == local_field_count) {
+        // Same length, different content - a prefix of equal length would have
+        // to be equality, and it is not.
+        return CYCLONE_MESSAGE_REJECT;
+    }
+    if (peer_field_count < local_field_count) {
+        // The peer's own fingerprint already is the value at the shared index.
+        return known->prefixes[peer_field_count - 1] == peer_fingerprint
+                   ? CYCLONE_MESSAGE_MATCH
+                   : CYCLONE_MESSAGE_REJECT;
+    }
+    *ask_for = local_field_count;
+    return CYCLONE_MESSAGE_NEED_PREFIX;
+}
+
+// Compares a peer's whole message table against this schema's.
+//
+// `peer_messages`/`peer_messages_count` is the peer's
+// (id, field count, fingerprint) table - what
+// `CYCLONE_MESSAGES`/`CYCLONE_MESSAGES_COUNT` is on its side. A
+// CYCLONE_HANDSHAKE_NEED_MORE result means at least one message needs the
+// extra round; walk the table with `cyclone_check_message` to find which ones.
 static inline CycloneHandshake cyclone_handshake(uint64_t peer_schema_fingerprint,
                                                    const CyclonePeerMessage *peer_messages,
                                                    size_t peer_messages_count) {
@@ -108,16 +229,23 @@ static inline CycloneHandshake cyclone_handshake(uint64_t peer_schema_fingerprin
         return CYCLONE_HANDSHAKE_CURRENT;
     }
 
+    bool need_more = false;
     for (size_t i = 0; i < peer_messages_count; ++i) {
-        const CycloneMessage *known = cyclone_message(peer_messages[i].id);
-        if (known != NULL && known->fingerprint != peer_messages[i].fingerprint) {
-            // A message both ends know, with two shapes. Every other
-            // message could match and it would still be unsafe to speak.
+        uint32_t ask_for = 0;
+        CycloneMessageCheck check = cyclone_check_message(
+            peer_messages[i].id, peer_messages[i].field_count, peer_messages[i].fingerprint,
+            &ask_for);
+        if (check == CYCLONE_MESSAGE_REJECT) {
+            // One mismatch decides the whole session. Every other message could
+            // agree and it would still be unsafe to speak.
             return CYCLONE_HANDSHAKE_REJECT;
+        }
+        if (check == CYCLONE_MESSAGE_NEED_PREFIX) {
+            need_more = true;
         }
     }
 
-    return CYCLONE_HANDSHAKE_OUTDATED;
+    return need_more ? CYCLONE_HANDSHAKE_NEED_MORE : CYCLONE_HANDSHAKE_OUTDATED;
 }
 
 // Whether this schema was generated with `validate_message_fingerprint`.

@@ -443,9 +443,15 @@ fn the_message_table_holds_every_message() {
 
 #[test]
 fn handshake_current() {
-    let peer: Vec<(u32, u64)> = CYCLONE_MESSAGES
+    let peer: Vec<(u32, u32, u64)> = CYCLONE_MESSAGES
         .iter()
-        .map(|message| (message.id, message.fingerprint))
+        .map(|message| {
+            (
+                message.id,
+                message.prefixes.len() as u32,
+                message.fingerprint,
+            )
+        })
         .collect();
 
     assert_eq!(
@@ -454,11 +460,9 @@ fn handshake_current() {
     );
 }
 
-/// A peer on an older schema: it knows fewer messages, and every message both
-/// ends know is byte-identical. Safe to talk.
 #[test]
 fn handshake_outdated() {
-    let peer = [(PLAYER_EDGE_MESSAGE_ID, PLAYER_EDGE_FINGERPRINT)];
+    let peer = [(PLAYER_EDGE_MESSAGE_ID, 3, PLAYER_EDGE_FINGERPRINT)];
 
     assert_eq!(
         cyclone_handshake(0xDEAD_BEEF_0000_0000, &peer),
@@ -466,11 +470,9 @@ fn handshake_outdated() {
     );
 }
 
-/// A peer that knows `Player.edge` as a different shape. There is nothing to
-/// negotiate.
 #[test]
 fn handshake_breaking_is_rejected() {
-    let peer = [(PLAYER_EDGE_MESSAGE_ID, PLAYER_EDGE_FINGERPRINT ^ 1)];
+    let peer = [(PLAYER_EDGE_MESSAGE_ID, 3, PLAYER_EDGE_FINGERPRINT ^ 1)];
 
     assert_eq!(
         cyclone_handshake(0xDEAD_BEEF_0000_0000, &peer),
@@ -478,19 +480,82 @@ fn handshake_breaking_is_rejected() {
     );
 }
 
-/// A message only the peer has says nothing about the messages we share - it
-/// is the definition of being one version behind.
 #[test]
 fn a_message_only_one_side_knows_does_not_reject() {
     let peer = [
-        (PLAYER_EDGE_MESSAGE_ID, PLAYER_EDGE_FINGERPRINT),
-        (0x1234_5678, 0xAAAA_BBBB_CCCC_DDDD),
+        (PLAYER_EDGE_MESSAGE_ID, 3, PLAYER_EDGE_FINGERPRINT),
+        (0x1234_5678, 2, 0xAAAA_BBBB_CCCC_DDDD),
     ];
 
     assert_eq!(
         cyclone_handshake(0xDEAD_BEEF_0000_0000, &peer),
         CycloneHandshake::Outdated
     );
+}
+
+#[test]
+fn a_peer_with_fewer_fields_is_accepted_when_the_prefix_agrees() {
+    let peer = [(PLAYER_EDGE_MESSAGE_ID, 2, PLAYER_EDGE_PREFIXES[1])];
+
+    assert_eq!(
+        cyclone_message_check(PLAYER_EDGE_MESSAGE_ID, 2, PLAYER_EDGE_PREFIXES[1]),
+        CycloneMessageCheck::Match
+    );
+    assert_eq!(
+        cyclone_handshake(0xDEAD_BEEF_0000_0000, &peer),
+        CycloneHandshake::Outdated
+    );
+}
+
+#[test]
+fn a_peer_with_fewer_fields_is_rejected_when_the_prefix_disagrees() {
+    let peer = [(PLAYER_EDGE_MESSAGE_ID, 2, PLAYER_EDGE_PREFIXES[1] ^ 1)];
+
+    assert_eq!(
+        cyclone_handshake(0xDEAD_BEEF_0000_0000, &peer),
+        CycloneHandshake::Reject
+    );
+}
+
+#[test]
+fn a_peer_with_more_fields_needs_one_more_exchange() {
+    let peer = [(PLAYER_EDGE_MESSAGE_ID, 5, 0xAAAA_BBBB_CCCC_DDDD)];
+
+    assert_eq!(
+        cyclone_message_check(PLAYER_EDGE_MESSAGE_ID, 5, 0xAAAA_BBBB_CCCC_DDDD),
+        CycloneMessageCheck::NeedPrefix(3)
+    );
+    assert_eq!(
+        cyclone_handshake(0xDEAD_BEEF_0000_0000, &peer),
+        CycloneHandshake::NeedMore
+    );
+}
+
+#[test]
+fn a_prefix_is_readable_by_field_count() {
+    assert_eq!(
+        cyclone_prefix(PLAYER_EDGE_MESSAGE_ID, 1),
+        Some(PLAYER_EDGE_PREFIXES[0])
+    );
+    assert_eq!(
+        cyclone_prefix(PLAYER_EDGE_MESSAGE_ID, 3),
+        Some(PLAYER_EDGE_FINGERPRINT)
+    );
+    assert_eq!(cyclone_prefix(PLAYER_EDGE_MESSAGE_ID, 0), None);
+    assert_eq!(cyclone_prefix(PLAYER_EDGE_MESSAGE_ID, 4), None);
+    assert_eq!(cyclone_prefix(0x1234_5678, 1), None);
+}
+
+#[test]
+fn the_last_prefix_is_the_message_fingerprint() {
+    for message in CYCLONE_MESSAGES {
+        assert_eq!(
+            message.prefixes.last(),
+            Some(&message.fingerprint),
+            "{}",
+            message.name
+        );
+    }
 }
 
 /// The envelope is off by default: no frame carries a fingerprint, and the

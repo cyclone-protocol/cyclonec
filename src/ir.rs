@@ -105,6 +105,7 @@ pub struct Message {
     pub name: String,
     pub id: u32,
     pub fingerprint: Fingerprint,
+    pub prefixes: Vec<Fingerprint>,
     pub fields: Vec<Field>,
 }
 
@@ -209,6 +210,7 @@ impl Schema {
                         codec: codec.clone(),
                         id: fingerprint::message_id(&name),
                         fingerprint: fingerprint::message(model, codec, &resolved),
+                        prefixes: fingerprint::message_prefixes(model, codec, &resolved),
                         fields: model
                             .fields_in(codec)
                             .map(|field| Field {

@@ -69,6 +69,26 @@ fn message_json(message: &Message) -> Json {
             Json::string(hex64(message.fingerprint.u64())),
         ),
         (
+            "prefixes",
+            Json::Array(
+                message
+                    .prefixes
+                    .iter()
+                    .map(|prefix| Json::string(prefix.tagged()))
+                    .collect(),
+            ),
+        ),
+        (
+            "prefixes_u64",
+            Json::Array(
+                message
+                    .prefixes
+                    .iter()
+                    .map(|prefix| Json::string(hex64(prefix.u64())))
+                    .collect(),
+            ),
+        ),
+        (
             "fields",
             Json::Array(
                 message
@@ -211,12 +231,25 @@ fn read_message(model: &str, codec: &str, value: &Json) -> Result<Message, Strin
         .map(|field| read_field(model, field))
         .collect::<Result<Vec<Field>, String>>()?;
 
+    let prefixes = match value.get("prefixes").and_then(Json::as_array) {
+        Some(items) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .ok_or_else(|| format!("message '{name}' has a malformed `prefixes` entry"))
+                    .and_then(Fingerprint::parse)
+            })
+            .collect::<Result<Vec<Fingerprint>, String>>()?,
+        None => Vec::new(),
+    };
+
     Ok(Message {
         model: model.to_owned(),
         codec: codec.to_owned(),
         name,
         id,
         fingerprint,
+        prefixes,
         fields,
     })
 }

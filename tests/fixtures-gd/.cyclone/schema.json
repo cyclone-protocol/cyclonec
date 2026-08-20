@@ -45,6 +45,16 @@
           "id": "0x432AB486",
           "fingerprint": "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564",
           "fingerprint_u64": "0x1C6D09808C8BA4CA",
+          "prefixes": [
+            "sha256:61b0fcfab53a875e1350ef9b29988afa006fea32a47233dbfb48fe28579a189b",
+            "sha256:f1ed8779e2a4a35d30067fa88ba1cec15f7417ea9907df5752f06b97a0d93ddc",
+            "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564"
+          ],
+          "prefixes_u64": [
+            "0x61B0FCFAB53A875E",
+            "0xF1ED8779E2A4A35D",
+            "0x1C6D09808C8BA4CA"
+          ],
           "fields": [
             {
               "name": "id",
@@ -64,6 +74,12 @@
           "id": "0xF4716BBE",
           "fingerprint": "sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657",
           "fingerprint_u64": "0xEB9B9E10AA5F77DC",
+          "prefixes": [
+            "sha256:eb9b9e10aa5f77dc7dfa71802e20e767d8f639131d94c234125a5b223bd29657"
+          ],
+          "prefixes_u64": [
+            "0xEB9B9E10AA5F77DC"
+          ],
           "fields": [
             {
               "name": "id",
@@ -93,6 +109,12 @@
           "id": "0xC61DC711",
           "fingerprint": "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c",
           "fingerprint_u64": "0xB34420C17EEFD973",
+          "prefixes": [
+            "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c"
+          ],
+          "prefixes_u64": [
+            "0xB34420C17EEFD973"
+          ],
           "fields": [
             {
               "name": "level",
@@ -143,6 +165,18 @@
           "id": "0x90AF7FE0",
           "fingerprint": "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605",
           "fingerprint_u64": "0x8289219A2DCF8EB9",
+          "prefixes": [
+            "sha256:25c018e05da440419b5640f0835125f491673c5025b2617556a1a55647617813",
+            "sha256:cc979a85a705edb076560f80c4c1dfaea4296851501d4b02ae5ed533bb1604cf",
+            "sha256:3e437e5f61702d71ea8862773e12e0d01d0bd989927182cc0f2eccfdebe5a3cf",
+            "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605"
+          ],
+          "prefixes_u64": [
+            "0x25C018E05DA44041",
+            "0xCC979A85A705EDB0",
+            "0x3E437E5F61702D71",
+            "0x8289219A2DCF8EB9"
+          ],
           "fields": [
             {
               "name": "captain",

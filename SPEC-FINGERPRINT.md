@@ -8,6 +8,11 @@ different* - and nothing else. Working out *how* two schemas differ is a build
 time job, done from two schemas, by a compatibility checker; a fingerprint is
 never asked to explain itself.
 
+One question two peers do have to answer at run time is narrower than "how":
+*is the shorter field list an exact prefix of the longer one?* - the condition
+RFC-0002 §9.1 makes a valid version difference. Section 3.5 covers it with a
+fingerprint per prefix, which is still only ever compared, never explained.
+
 This document defines the exact bytes that get hashed. It exists because
 "deterministic" is not a property an implementation can have on its own: Rust,
 Go, C#, C++ and every future SDK must produce **byte-identical digests from the
@@ -188,7 +193,58 @@ already on the expansion stack (reachable through `Array<T>`), without losing
 the fact that the recursion is there. The stack holds model names, is pushed
 before a body is expanded and popped after.
 
-### 3.5 A schema
+### 3.5 A prefix
+
+A message with `n` fields has `n` **prefix fingerprints**. The `k`th one, for
+`k = 1..n`, is the fingerprint of **that same message truncated to its first
+`k` fields**.
+
+```
+cyclone-fingerprint/2          cyclone-fingerprint/2
+message Player.edge            message Player.edge
+field 0 id u32          k=1    field 0 id u32          k=2
+end                            field 1 x f32
+                               end
+```
+
+There is no new rule here, and deliberately so. `<index>` already counts from
+`0` over the fields this codec carries (section 3.1), and a nested model is
+inlined into the field that holds it (section 3.4) - so dropping the tail
+leaves every earlier field's text byte-for-byte unchanged. Truncation is just
+section 3.1 applied to a shorter field list.
+
+Two consequences follow, and both are load-bearing:
+
+- **The `n`th prefix *is* the message fingerprint.** Nothing in section 3.1
+  changes, so no digest that exists today moves. This is an addition, not a
+  new canonical form, and the version tag stays `cyclone-fingerprint/2`.
+- **The `k`th prefix of an `n`-field message equals the real fingerprint of a
+  peer that declares only those `k` fields.** That is not a coincidence to be
+  worked around; it is the entire mechanism.
+
+**Why they exist.** A fingerprint answers "the same, or different" (section 1),
+but RFC-0002 §9.1 asks a different question: *is the shorter field list an exact
+prefix of the longer one?* Peers on either side of an appended field MUST
+interoperate - RFC-0003 §8.6 pins that as vectors V-001/V-002 - and one digest
+per message cannot tell "a field was appended" from "two same-typed fields were
+swapped". The chain restores exactly the missing information and nothing else:
+comparing at `k = min(n_local, n_peer)` is RFC-0002 §9.1's condition, expressed
+in eight bytes.
+
+**They are not a wire format.** The chain stays in each peer's own generated
+code. A peer sends its field count and its last entry; the side doing the
+comparison reads its own chain at the shared index. Only when the peer has more
+fields than the local schema does the value live at an index the peer alone can
+produce, and only then is one extra exchange needed.
+
+**Computing them.** The obvious reading - hash each truncation independently -
+is correct and is what the definition says. It is also `O(n²)` over the text. An
+implementation may instead keep one running hash over the canonical text and,
+after appending each field's line, finalise a *clone* of it with `end\n`
+appended. Both produce identical bytes; the clone form is `O(n)`. Either is
+fine, since this runs at build time.
+
+### 3.6 A schema
 
 Every message, by name, with its own digest, **sorted by the message name** as a
 byte-wise ascending string comparison - so the order files happened to be
@@ -203,7 +259,7 @@ message <name> <lowercase hex digest>
 end
 ```
 
-### 3.6 The version tag
+### 3.7 The version tag
 
 `cyclone-fingerprint/2` is inside the hash on purpose. A future canonical form
 is `cyclone-fingerprint/3`, and old and new fingerprints then cannot silently
@@ -307,6 +363,13 @@ Against the changes the brief enumerates, for a message:
 A fingerprint says only *different*. `cyclonec compat` and `cyclonec ci` say
 which of these it was, from the two schemas, at build time.
 
+The one distinction a peer can draw at run time is the prefix one. Comparing
+prefix fingerprints (section 3.5) at `k = min(n_local, n_peer)` separates the
+first row of that table - a field appended, which RFC-0002 §9.1 requires peers
+to tolerate - from every other row, which moves a field at an index both ends
+carry. That is the whole of what the handshake decides; it still cannot say
+*which* of the other rows it was.
+
 ---
 
 ## 7. Worked example
@@ -341,6 +404,18 @@ u64:    0x1C6D09808C8BA4CA
 id:     0x432AB486
 ```
 
+Its prefix chain (section 3.5), as 64-bit forms:
+
+```
+k=1   { id }           0x61B0FCFAB53A875E
+k=2   { id, x }        0xF1ED8779E2A4A35D
+k=3   { id, x, y }     0x1C6D09808C8BA4CA   <- the message fingerprint
+```
+
+A peer that really declares `Player.edge` as just `{ id, x }` computes
+`0xF1ED8779E2A4A35D` as its own message fingerprint. That it lands on this
+message's `k=2` entry is the mechanism, not a coincidence.
+
 The same three digests come out of the Go struct that spells those fields
 `ID`, `X`, `Y` and the C# class that spells them `Id`, `X`, `Y`: section 3.2 is
 applied before the text above is built, so all three read `field 0 id u32`.
@@ -362,7 +437,11 @@ which is the artifact another SDK should check itself against.
    and it is the reason `/2` exists.
 3. Render the canonical text exactly as section 3 says.
 4. SHA-256 it.
-5. Check yourself against `tests/vectors/cyclone-vectors.json`. If one digest
+5. Emit the prefix chain too (section 3.5): the same text truncated to the
+   first `k` fields, for every `k`. Assert that the last entry equals the
+   message fingerprint - if it does not, your truncation is not section 3.1
+   applied to a shorter field list.
+6. Check yourself against `tests/vectors/cyclone-vectors.json`. If one digest
    differs, the text differs; print your canonical text and diff it against the
    `canonical_example` in that file.
 

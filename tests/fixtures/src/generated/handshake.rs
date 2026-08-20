@@ -2,7 +2,7 @@
 // DO NOT EDIT MANUALLY
 // fingerprint: sha256:eb23b6c1c7d3bf85a5fb387efe1e3d310686e0e7698124aaeeef0eaebd0ff8b9
 // cyclonec-version: 0.2.0
-// generated-at: 2026-08-20T06:05:20Z
+// generated-at: 2026-08-20T11:03:23Z
 //
 // Every fingerprint this schema publishes, and the handshake that compares
 // them. Generated - never edit, and never hand-maintain a copy of these
@@ -20,42 +20,117 @@ pub const DEVICE_STATE_FINGERPRINT: u64 = 0xC2D44D0B1936B55F;
 /// `DeviceState.edge` - the wire contract `DeviceStateEdgeCodec` encodes and decodes.
 pub const DEVICE_STATE_EDGE_MESSAGE_ID: u32 = 0x0038B478;
 pub const DEVICE_STATE_EDGE_FINGERPRINT: u64 = 0x08370BABD3DD56E1;
+/// One fingerprint per prefix of `DeviceState.edge`: entry `k-1` covers its first `k`
+/// fields. The last entry is `DEVICE_STATE_EDGE_FINGERPRINT`. Never sent whole - a peer
+/// sends its field count and its last entry, and the two sides compare at
+/// `min` of the two counts (RFC-0002 §9.1).
+pub const DEVICE_STATE_EDGE_PREFIXES: &[u64] = &[
+    0x1701CC7A77F22778,
+    0x08370BABD3DD56E1,
+];
 /// `DeviceState.unity` - the wire contract `DeviceStateUnityCodec` encodes and decodes.
 pub const DEVICE_STATE_UNITY_MESSAGE_ID: u32 = 0x5AA2FA85;
 pub const DEVICE_STATE_UNITY_FINGERPRINT: u64 = 0x21D6D62074B16FB3;
+/// One fingerprint per prefix of `DeviceState.unity`: entry `k-1` covers its first `k`
+/// fields. The last entry is `DEVICE_STATE_UNITY_FINGERPRINT`. Never sent whole - a peer
+/// sends its field count and its last entry, and the two sides compare at
+/// `min` of the two counts (RFC-0002 §9.1).
+pub const DEVICE_STATE_UNITY_PREFIXES: &[u64] = &[
+    0x17A6F9B392B662B9,
+    0x21D6D62074B16FB3,
+];
 
 /// `EveryPrimitive`, as declared - every annotated field, whatever codec it joined.
 pub const EVERY_PRIMITIVE_FINGERPRINT: u64 = 0x61B3053E2E94F615;
 /// `EveryPrimitive.edge` - the wire contract `EveryPrimitiveEdgeCodec` encodes and decodes.
 pub const EVERY_PRIMITIVE_EDGE_MESSAGE_ID: u32 = 0x97F77FDC;
 pub const EVERY_PRIMITIVE_EDGE_FINGERPRINT: u64 = 0xEF0BC8BBA9BC8555;
+/// One fingerprint per prefix of `EveryPrimitive.edge`: entry `k-1` covers its first `k`
+/// fields. The last entry is `EVERY_PRIMITIVE_EDGE_FINGERPRINT`. Never sent whole - a peer
+/// sends its field count and its last entry, and the two sides compare at
+/// `min` of the two counts (RFC-0002 §9.1).
+pub const EVERY_PRIMITIVE_EDGE_PREFIXES: &[u64] = &[
+    0x84E88DD5FF563CFD,
+    0xDF9C8A355D462911,
+    0xB540DB61E6856AEE,
+    0xEE311DC8ED9B0F1E,
+    0x703E59CFB80A1F2B,
+    0x687E37968542D877,
+    0xD4F1AFAEFF1E59A8,
+    0xF03078EB5CD83F69,
+    0x5A573875FC652B9D,
+    0xC48B5205BCDCA069,
+    0x1743B3D1A99FBCC1,
+    0x31EEECA5C6E0756A,
+    0xEF0BC8BBA9BC8555,
+];
 
 /// `Player`, as declared - every annotated field, whatever codec it joined.
 pub const PLAYER_FINGERPRINT: u64 = 0xB2ED170BAC65B6A1;
 /// `Player.edge` - the wire contract `PlayerEdgeCodec` encodes and decodes.
 pub const PLAYER_EDGE_MESSAGE_ID: u32 = 0x432AB486;
 pub const PLAYER_EDGE_FINGERPRINT: u64 = 0x1C6D09808C8BA4CA;
+/// One fingerprint per prefix of `Player.edge`: entry `k-1` covers its first `k`
+/// fields. The last entry is `PLAYER_EDGE_FINGERPRINT`. Never sent whole - a peer
+/// sends its field count and its last entry, and the two sides compare at
+/// `min` of the two counts (RFC-0002 §9.1).
+pub const PLAYER_EDGE_PREFIXES: &[u64] = &[
+    0x61B0FCFAB53A875E,
+    0xF1ED8779E2A4A35D,
+    0x1C6D09808C8BA4CA,
+];
 
 /// `PlayerInfo`, as declared - every annotated field, whatever codec it joined.
 pub const PLAYER_INFO_FINGERPRINT: u64 = 0xA1C3DBA922185BBD;
 /// `PlayerInfo.edge` - the wire contract `PlayerInfoEdgeCodec` encodes and decodes.
 pub const PLAYER_INFO_EDGE_MESSAGE_ID: u32 = 0xC61DC711;
 pub const PLAYER_INFO_EDGE_FINGERPRINT: u64 = 0xB34420C17EEFD973;
+/// One fingerprint per prefix of `PlayerInfo.edge`: entry `k-1` covers its first `k`
+/// fields. The last entry is `PLAYER_INFO_EDGE_FINGERPRINT`. Never sent whole - a peer
+/// sends its field count and its last entry, and the two sides compare at
+/// `min` of the two counts (RFC-0002 §9.1).
+pub const PLAYER_INFO_EDGE_PREFIXES: &[u64] = &[
+    0xB34420C17EEFD973,
+];
 
 /// `Team`, as declared - every annotated field, whatever codec it joined.
 pub const TEAM_FINGERPRINT: u64 = 0x89D79F98B706B2FA;
 /// `Team.edge` - the wire contract `TeamEdgeCodec` encodes and decodes.
 pub const TEAM_EDGE_MESSAGE_ID: u32 = 0x90AF7FE0;
 pub const TEAM_EDGE_FINGERPRINT: u64 = 0x8289219A2DCF8EB9;
+/// One fingerprint per prefix of `Team.edge`: entry `k-1` covers its first `k`
+/// fields. The last entry is `TEAM_EDGE_FINGERPRINT`. Never sent whole - a peer
+/// sends its field count and its last entry, and the two sides compare at
+/// `min` of the two counts (RFC-0002 §9.1).
+pub const TEAM_EDGE_PREFIXES: &[u64] = &[
+    0x25C018E05DA44041,
+    0xCC979A85A705EDB0,
+    0x3E437E5F61702D71,
+    0x8289219A2DCF8EB9,
+];
 
 /// `Telemetry`, as declared - every annotated field, whatever codec it joined.
 pub const TELEMETRY_FINGERPRINT: u64 = 0x46EA1AAF117094B4;
 /// `Telemetry.edge` - the wire contract `TelemetryEdgeCodec` encodes and decodes.
 pub const TELEMETRY_EDGE_MESSAGE_ID: u32 = 0x0F9FA7D3;
 pub const TELEMETRY_EDGE_FINGERPRINT: u64 = 0x61D7C61C25F19370;
+/// One fingerprint per prefix of `Telemetry.edge`: entry `k-1` covers its first `k`
+/// fields. The last entry is `TELEMETRY_EDGE_FINGERPRINT`. Never sent whole - a peer
+/// sends its field count and its last entry, and the two sides compare at
+/// `min` of the two counts (RFC-0002 §9.1).
+pub const TELEMETRY_EDGE_PREFIXES: &[u64] = &[
+    0x61D7C61C25F19370,
+];
 /// `Telemetry.orange_pi` - the wire contract `TelemetryOrangePiCodec` encodes and decodes.
 pub const TELEMETRY_ORANGE_PI_MESSAGE_ID: u32 = 0x9EC1A22C;
 pub const TELEMETRY_ORANGE_PI_FINGERPRINT: u64 = 0xF09F1FB38B850FB9;
+/// One fingerprint per prefix of `Telemetry.orange_pi`: entry `k-1` covers its first `k`
+/// fields. The last entry is `TELEMETRY_ORANGE_PI_FINGERPRINT`. Never sent whole - a peer
+/// sends its field count and its last entry, and the two sides compare at
+/// `min` of the two counts (RFC-0002 §9.1).
+pub const TELEMETRY_ORANGE_PI_PREFIXES: &[u64] = &[
+    0xF09F1FB38B850FB9,
+];
 
 /// One message: its id, its name, and the fingerprint of its wire contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,19 +142,23 @@ pub struct CycloneMessage {
     pub name: &'static str,
     /// Changes whenever the message's fields do.
     pub fingerprint: u64,
+    /// One entry per field: entry `k-1` covers the first `k` fields. The last
+    /// entry is `fingerprint`. Stays local; only its length and its last entry
+    /// ever go on the wire.
+    pub prefixes: &'static [u64],
 }
 
 /// Every message this schema declares, sorted by id.
 #[allow(dead_code)]
 pub const CYCLONE_MESSAGES: &[CycloneMessage] = &[
-    CycloneMessage { id: DEVICE_STATE_EDGE_MESSAGE_ID, name: "DeviceState.edge", fingerprint: DEVICE_STATE_EDGE_FINGERPRINT },
-    CycloneMessage { id: TELEMETRY_EDGE_MESSAGE_ID, name: "Telemetry.edge", fingerprint: TELEMETRY_EDGE_FINGERPRINT },
-    CycloneMessage { id: PLAYER_EDGE_MESSAGE_ID, name: "Player.edge", fingerprint: PLAYER_EDGE_FINGERPRINT },
-    CycloneMessage { id: DEVICE_STATE_UNITY_MESSAGE_ID, name: "DeviceState.unity", fingerprint: DEVICE_STATE_UNITY_FINGERPRINT },
-    CycloneMessage { id: TEAM_EDGE_MESSAGE_ID, name: "Team.edge", fingerprint: TEAM_EDGE_FINGERPRINT },
-    CycloneMessage { id: EVERY_PRIMITIVE_EDGE_MESSAGE_ID, name: "EveryPrimitive.edge", fingerprint: EVERY_PRIMITIVE_EDGE_FINGERPRINT },
-    CycloneMessage { id: TELEMETRY_ORANGE_PI_MESSAGE_ID, name: "Telemetry.orange_pi", fingerprint: TELEMETRY_ORANGE_PI_FINGERPRINT },
-    CycloneMessage { id: PLAYER_INFO_EDGE_MESSAGE_ID, name: "PlayerInfo.edge", fingerprint: PLAYER_INFO_EDGE_FINGERPRINT },
+    CycloneMessage { id: DEVICE_STATE_EDGE_MESSAGE_ID, name: "DeviceState.edge", fingerprint: DEVICE_STATE_EDGE_FINGERPRINT, prefixes: DEVICE_STATE_EDGE_PREFIXES },
+    CycloneMessage { id: TELEMETRY_EDGE_MESSAGE_ID, name: "Telemetry.edge", fingerprint: TELEMETRY_EDGE_FINGERPRINT, prefixes: TELEMETRY_EDGE_PREFIXES },
+    CycloneMessage { id: PLAYER_EDGE_MESSAGE_ID, name: "Player.edge", fingerprint: PLAYER_EDGE_FINGERPRINT, prefixes: PLAYER_EDGE_PREFIXES },
+    CycloneMessage { id: DEVICE_STATE_UNITY_MESSAGE_ID, name: "DeviceState.unity", fingerprint: DEVICE_STATE_UNITY_FINGERPRINT, prefixes: DEVICE_STATE_UNITY_PREFIXES },
+    CycloneMessage { id: TEAM_EDGE_MESSAGE_ID, name: "Team.edge", fingerprint: TEAM_EDGE_FINGERPRINT, prefixes: TEAM_EDGE_PREFIXES },
+    CycloneMessage { id: EVERY_PRIMITIVE_EDGE_MESSAGE_ID, name: "EveryPrimitive.edge", fingerprint: EVERY_PRIMITIVE_EDGE_FINGERPRINT, prefixes: EVERY_PRIMITIVE_EDGE_PREFIXES },
+    CycloneMessage { id: TELEMETRY_ORANGE_PI_MESSAGE_ID, name: "Telemetry.orange_pi", fingerprint: TELEMETRY_ORANGE_PI_FINGERPRINT, prefixes: TELEMETRY_ORANGE_PI_PREFIXES },
+    CycloneMessage { id: PLAYER_INFO_EDGE_MESSAGE_ID, name: "PlayerInfo.edge", fingerprint: PLAYER_INFO_EDGE_FINGERPRINT, prefixes: PLAYER_INFO_EDGE_PREFIXES },
 ];
 
 /// What a peer's fingerprints mean for this one.
@@ -88,12 +167,15 @@ pub const CYCLONE_MESSAGES: &[CycloneMessage] = &[
 pub enum CycloneHandshake {
     /// The same schema, exactly.
     Current,
-    /// A different schema, but no message both ends know disagrees. One side is
-    /// older; every message they share is byte-identical.
+    /// A different schema, but every message both ends know agrees on the
+    /// fields both ends carry. Safe to proceed.
     Outdated,
-    /// A message both ends know has two different shapes. There is nothing to
-    /// negotiate: disconnect.
+    /// Both ends put different fields at an index both of them carry. There is
+    /// nothing to negotiate: disconnect.
     Reject,
+    /// Not decidable from the peer's table alone - at least one message needs
+    /// the extra exchange described on `CycloneMessageCheck::NeedPrefix`.
+    NeedMore,
 }
 
 /// The message with this id, if this schema declares it.
@@ -117,30 +199,109 @@ pub fn cyclone_message(id: u32) -> ::core::option::Option<&'static CycloneMessag
     }
 }
 
-/// Compares a peer's fingerprints against this schema's.
+/// This schema's fingerprint for the first `field_count` fields of a message,
+/// or `None` if it does not declare that message or does not have that many
+/// fields. `field_count` counts from 1; 0 is the empty prefix and has no
+/// fingerprint because it always matches.
+#[allow(dead_code)]
+pub fn cyclone_prefix(id: u32, field_count: u32) -> ::core::option::Option<u64> {
+    let message = cyclone_message(id)?;
+    if field_count == 0 {
+        return ::core::option::Option::None;
+    }
+    message.prefixes.get(field_count as usize - 1).copied()
+}
+
+/// What one of the peer's messages means for this schema's message of the same
+/// id. See [`cyclone_message_check`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum CycloneMessageCheck {
+    /// Either this schema does not declare the message at all, or the fields
+    /// both ends carry agree. Nothing to do.
+    Match,
+    /// Both ends put different fields at an index both of them carry.
+    Reject,
+    /// Undecidable from what the peer sent: the peer has more fields than this
+    /// schema, so the answer lives at an index only the peer can produce. Ask
+    /// it for its prefix fingerprint at this field count, then feed the reply
+    /// to `cyclone_prefix` for the same id and compare.
+    NeedPrefix(u32),
+}
+
+/// Compares one of the peer's messages against this schema's.
 ///
-/// `peer_messages` is the peer's `(id, fingerprint)` table - what
-/// `CYCLONE_MESSAGES` is on its side. It is only worth sending when the schema
-/// fingerprints already differ.
+/// `peer_field_count` and `peer_fingerprint` are what the peer declares for
+/// this id - its field count and the fingerprint of its whole message. This is
+/// RFC-0002 §9.1's prefix test: the two are compatible when the shorter field
+/// list is an exact prefix of the longer one, so the comparison happens at
+/// `min(peer_field_count, local field count)`.
+#[allow(dead_code)]
+pub fn cyclone_message_check(
+    id: u32,
+    peer_field_count: u32,
+    peer_fingerprint: u64,
+) -> CycloneMessageCheck {
+    let ::core::option::Option::Some(known) = cyclone_message(id) else {
+        // Not a message this schema declares, so it is never exchanged.
+        return CycloneMessageCheck::Match;
+    };
+    let local_field_count = known.prefixes.len() as u32;
+
+    if peer_fingerprint == known.fingerprint {
+        return CycloneMessageCheck::Match;
+    }
+    if peer_field_count == 0 || local_field_count == 0 {
+        // The empty field list is a prefix of everything.
+        return CycloneMessageCheck::Match;
+    }
+    if peer_field_count == local_field_count {
+        // Same length, different content - a prefix of equal length would have
+        // to be equality, and it is not.
+        return CycloneMessageCheck::Reject;
+    }
+    if peer_field_count < local_field_count {
+        // The peer's own fingerprint already is the value at the shared index.
+        return match known.prefixes.get(peer_field_count as usize - 1) {
+            ::core::option::Option::Some(local) if *local == peer_fingerprint => {
+                CycloneMessageCheck::Match
+            }
+            _ => CycloneMessageCheck::Reject,
+        };
+    }
+    CycloneMessageCheck::NeedPrefix(local_field_count)
+}
+
+/// Compares a peer's whole message table against this schema's.
+///
+/// `peer_messages` is the peer's `(id, field count, fingerprint)` table - what
+/// `CYCLONE_MESSAGES` is on its side. A `NeedMore` result means at least one
+/// message needs the extra round described on
+/// [`CycloneMessageCheck::NeedPrefix`]; walk the table with
+/// `cyclone_message_check` to find which ones.
 #[allow(dead_code)]
 pub fn cyclone_handshake(
     peer_schema_fingerprint: u64,
-    peer_messages: &[(u32, u64)],
+    peer_messages: &[(u32, u32, u64)],
 ) -> CycloneHandshake {
     if peer_schema_fingerprint == CYCLONE_SCHEMA_FINGERPRINT {
         return CycloneHandshake::Current;
     }
 
-    for (id, fingerprint) in peer_messages {
-        if let ::core::option::Option::Some(known) = cyclone_message(*id) {
-            if known.fingerprint != *fingerprint {
-                // A message both ends know, with two shapes. Every other
-                // message could match and it would still be unsafe to speak.
-                return CycloneHandshake::Reject;
-            }
+    let mut need_more = false;
+    for (id, field_count, fingerprint) in peer_messages {
+        match cyclone_message_check(*id, *field_count, *fingerprint) {
+            // One mismatch decides the whole session. Every other message
+            // could agree and it would still be unsafe to speak.
+            CycloneMessageCheck::Reject => return CycloneHandshake::Reject,
+            CycloneMessageCheck::NeedPrefix(_) => need_more = true,
+            CycloneMessageCheck::Match => {}
         }
     }
 
+    if need_more {
+        return CycloneHandshake::NeedMore;
+    }
     CycloneHandshake::Outdated
 }
 

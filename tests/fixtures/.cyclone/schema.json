@@ -45,6 +45,14 @@
           "id": "0x0038B478",
           "fingerprint": "sha256:08370babd3dd56e18c3c1b1ce28ee9ee222463f6c2348b91e3cf9ba7ee06ecee",
           "fingerprint_u64": "0x08370BABD3DD56E1",
+          "prefixes": [
+            "sha256:1701cc7a77f2277884023e91525dc7c831434f89cc9934796d991f4ded7edeed",
+            "sha256:08370babd3dd56e18c3c1b1ce28ee9ee222463f6c2348b91e3cf9ba7ee06ecee"
+          ],
+          "prefixes_u64": [
+            "0x1701CC7A77F22778",
+            "0x08370BABD3DD56E1"
+          ],
           "fields": [
             {
               "name": "id",
@@ -60,6 +68,14 @@
           "id": "0x5AA2FA85",
           "fingerprint": "sha256:21d6d62074b16fb3901eb8b9bc9a6fc09a3613506416c6ff471ee1fef19fab0b",
           "fingerprint_u64": "0x21D6D62074B16FB3",
+          "prefixes": [
+            "sha256:17a6f9b392b662b908705759099380a39d8c462cf0a70bf6e3c9b2666700e06f",
+            "sha256:21d6d62074b16fb3901eb8b9bc9a6fc09a3613506416c6ff471ee1fef19fab0b"
+          ],
+          "prefixes_u64": [
+            "0x17A6F9B392B662B9",
+            "0x21D6D62074B16FB3"
+          ],
           "fields": [
             {
               "name": "id",
@@ -177,6 +193,36 @@
           "id": "0x97F77FDC",
           "fingerprint": "sha256:ef0bc8bba9bc855501c2e691f8e65b003ca9f17b860f2693100a8219189ecf7e",
           "fingerprint_u64": "0xEF0BC8BBA9BC8555",
+          "prefixes": [
+            "sha256:84e88dd5ff563cfd955ebad082ccf956cd765446375e3bc98ba8c92d3dbddc60",
+            "sha256:df9c8a355d462911cfafaa257c6c697d649867b26dc14b2ae2553049620611a8",
+            "sha256:b540db61e6856aeea22a578b38ca394ec3faab3f94425ac5a63636b6a1b74d27",
+            "sha256:ee311dc8ed9b0f1e128e263a6bf0a0ad508e0d70a41b8495e898d23cf054a6a5",
+            "sha256:703e59cfb80a1f2b5d94ddea6528f456a5e3cc3b1c880427e5f463328fae8ce4",
+            "sha256:687e37968542d87796151440647f6b58ed926dcb03b88f2aecdeebd17a19762f",
+            "sha256:d4f1afaeff1e59a8b786269196abe00d65b7e4e1a6cf9ea9f67c8b0460759b01",
+            "sha256:f03078eb5cd83f696abf1742f6caf83c58c8319fd0ca3e58b2e9ea3b3cd145bb",
+            "sha256:5a573875fc652b9dfa23b9f2a90843e91395316bb2f527cd66d4eb673dcac8b3",
+            "sha256:c48b5205bcdca069877ab8a6803e114a9c18cfc9b4a5feeedea2a3b84eac37ec",
+            "sha256:1743b3d1a99fbcc17ec7996c0088958f0b77095dc028c78ceb843b6d512acc0a",
+            "sha256:31eeeca5c6e0756a3b969ae35fe4a5f9f51a4506f6b75437eb63dd23daa58953",
+            "sha256:ef0bc8bba9bc855501c2e691f8e65b003ca9f17b860f2693100a8219189ecf7e"
+          ],
+          "prefixes_u64": [
+            "0x84E88DD5FF563CFD",
+            "0xDF9C8A355D462911",
+            "0xB540DB61E6856AEE",
+            "0xEE311DC8ED9B0F1E",
+            "0x703E59CFB80A1F2B",
+            "0x687E37968542D877",
+            "0xD4F1AFAEFF1E59A8",
+            "0xF03078EB5CD83F69",
+            "0x5A573875FC652B9D",
+            "0xC48B5205BCDCA069",
+            "0x1743B3D1A99FBCC1",
+            "0x31EEECA5C6E0756A",
+            "0xEF0BC8BBA9BC8555"
+          ],
           "fields": [
             {
               "name": "flag",
@@ -268,6 +314,16 @@
           "id": "0x432AB486",
           "fingerprint": "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564",
           "fingerprint_u64": "0x1C6D09808C8BA4CA",
+          "prefixes": [
+            "sha256:61b0fcfab53a875e1350ef9b29988afa006fea32a47233dbfb48fe28579a189b",
+            "sha256:f1ed8779e2a4a35d30067fa88ba1cec15f7417ea9907df5752f06b97a0d93ddc",
+            "sha256:1c6d09808c8ba4ca9c7550a2fe664e114a2252a35161f95666644ec9b6eb7564"
+          ],
+          "prefixes_u64": [
+            "0x61B0FCFAB53A875E",
+            "0xF1ED8779E2A4A35D",
+            "0x1C6D09808C8BA4CA"
+          ],
           "fields": [
             {
               "name": "id",
@@ -305,6 +361,12 @@
           "id": "0xC61DC711",
           "fingerprint": "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c",
           "fingerprint_u64": "0xB34420C17EEFD973",
+          "prefixes": [
+            "sha256:b34420c17eefd973444bde6b7fc4d7dfebe996061c162872d402a0b8d9fc9a2c"
+          ],
+          "prefixes_u64": [
+            "0xB34420C17EEFD973"
+          ],
           "fields": [
             {
               "name": "level",
@@ -355,6 +417,18 @@
           "id": "0x90AF7FE0",
           "fingerprint": "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605",
           "fingerprint_u64": "0x8289219A2DCF8EB9",
+          "prefixes": [
+            "sha256:25c018e05da440419b5640f0835125f491673c5025b2617556a1a55647617813",
+            "sha256:cc979a85a705edb076560f80c4c1dfaea4296851501d4b02ae5ed533bb1604cf",
+            "sha256:3e437e5f61702d71ea8862773e12e0d01d0bd989927182cc0f2eccfdebe5a3cf",
+            "sha256:8289219a2dcf8eb9c91a4f58704612dae00d03fda28911ed63adc46d3faff605"
+          ],
+          "prefixes_u64": [
+            "0x25C018E05DA44041",
+            "0xCC979A85A705EDB0",
+            "0x3E437E5F61702D71",
+            "0x8289219A2DCF8EB9"
+          ],
           "fields": [
             {
               "name": "captain",
@@ -398,6 +472,12 @@
           "id": "0x0F9FA7D3",
           "fingerprint": "sha256:61d7c61c25f19370590ed6d4ae9f04255ee544cd7356f5364fed04da8eab5c98",
           "fingerprint_u64": "0x61D7C61C25F19370",
+          "prefixes": [
+            "sha256:61d7c61c25f19370590ed6d4ae9f04255ee544cd7356f5364fed04da8eab5c98"
+          ],
+          "prefixes_u64": [
+            "0x61D7C61C25F19370"
+          ],
           "fields": [
             {
               "name": "sequence",
@@ -409,6 +489,12 @@
           "id": "0x9EC1A22C",
           "fingerprint": "sha256:f09f1fb38b850fb9d52182717bfe27ff582361468a006ea9f66403f7fd5974f7",
           "fingerprint_u64": "0xF09F1FB38B850FB9",
+          "prefixes": [
+            "sha256:f09f1fb38b850fb9d52182717bfe27ff582361468a006ea9f66403f7fd5974f7"
+          ],
+          "prefixes_u64": [
+            "0xF09F1FB38B850FB9"
+          ],
           "fields": [
             {
               "name": "sequence",

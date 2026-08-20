@@ -24,7 +24,10 @@ pub fn handshake_file(
     }
     .render();
     out.push_str("#pragma once\n\n");
-    out.push_str("#include <cstddef>\n#include <cstdint>\n#include <string>\n#include <vector>\n");
+    out.push_str(
+        "#include <cstddef>\n#include <cstdint>\n#include <optional>\n#include <string>\n\
+         #include <vector>\n",
+    );
     if validate_message_fingerprint {
         out.push_str("\n#include \"runtime.hpp\"\n");
     }
@@ -69,6 +72,29 @@ pub fn handshake_file(
                 message_constant(&model.name, &message.codec),
                 hex64(message.fingerprint.u64())
             ));
+            let constant = message_constant(&model.name, &message.codec);
+            out.push_str(&format!(
+                "/// One fingerprint per prefix of `{}`: entry `k-1` covers its first `k`\n\
+                 /// fields. The last entry is `{constant}_FINGERPRINT`. Never sent whole - a\n\
+                 /// peer sends its field count and its last entry, and the two sides compare\n\
+                 /// at `min` of the two counts (RFC-0002 §9.1).\n",
+                message.name
+            ));
+            out.push_str(&format!(
+                "inline constexpr std::uint64_t {constant}_PREFIXES[] = {{\n"
+            ));
+            if message.prefixes.is_empty() {
+                out.push_str("    0ULL,\n");
+            } else {
+                for prefix in &message.prefixes {
+                    out.push_str(&format!("    {}ULL,\n", hex64(prefix.u64())));
+                }
+            }
+            out.push_str("};\n");
+            out.push_str(&format!(
+                "inline constexpr std::size_t {constant}_PREFIX_COUNT = {};\n",
+                message.prefixes.len()
+            ));
         }
         out.push('\n');
     }
@@ -83,7 +109,8 @@ pub fn handshake_file(
     for message in &messages {
         let constant = message_constant(&message.model, &message.codec);
         out.push_str(&format!(
-            "    CycloneMessage{{{constant}_MESSAGE_ID, {:?}, {constant}_FINGERPRINT}},\n",
+            "    CycloneMessage{{{constant}_MESSAGE_ID, {:?}, {constant}_FINGERPRINT, \
+             {constant}_PREFIXES, {constant}_PREFIX_COUNT}},\n",
             message.name
         ));
     }
@@ -146,6 +173,11 @@ struct CycloneMessage {
     const char* name;
     /// Changes whenever the message's fields do.
     std::uint64_t fingerprint;
+    /// One entry per field: entry `k-1` covers the first `k` fields. The last
+    /// entry is `fingerprint`. Stays local; only its length and its last entry
+    /// ever go on the wire.
+    const std::uint64_t* prefixes;
+    std::size_t prefix_count;
 };
 
 ";
@@ -155,18 +187,37 @@ const HANDSHAKE: &str = r####"
 enum class CycloneHandshake {
     /// The same schema, exactly.
     Current,
-    /// A different schema, but no message both ends know disagrees. One side
-    /// is older; every message they share is byte-identical.
+    /// A different schema, but every message both ends know agrees on the
+    /// fields both ends carry. Safe to proceed.
     Outdated,
-    /// A message both ends know has two different shapes. There is nothing
-    /// to negotiate: disconnect.
+    /// Both ends put different fields at an index both of them carry. There is
+    /// nothing to negotiate: disconnect.
     Reject,
+    /// Not decidable from the peer's table alone - at least one message needs
+    /// the extra exchange described on `CycloneMessageCheck::NeedPrefix`.
+    NeedMore,
 };
 
-/// One entry of a peer's `(id, fingerprint)` table - what `CYCLONE_MESSAGES`
-/// is on its side.
+/// What one of the peer's messages means for this schema's message of the
+/// same id.
+enum class CycloneMessageCheck {
+    /// Either this schema does not declare the message at all, or the fields
+    /// both ends carry agree. Nothing to do.
+    Match,
+    /// Both ends put different fields at an index both of them carry.
+    Reject,
+    /// Undecidable from what the peer sent: the peer has more fields than this
+    /// schema, so the answer lives at an index only the peer can produce. Ask
+    /// it for its prefix fingerprint at the reported field count, then compare
+    /// the reply against `cyclone_prefix` for the same id.
+    NeedPrefix,
+};
+
+/// One entry of a peer's `(id, field count, fingerprint)` table - what
+/// `CYCLONE_MESSAGES` is on its side.
 struct CyclonePeerMessage {
     std::uint32_t id;
+    std::uint32_t field_count;
     std::uint64_t fingerprint;
 };
 
@@ -188,11 +239,70 @@ inline const CycloneMessage* cyclone_message(std::uint32_t id) {
     return nullptr;
 }
 
-/// Compares a peer's fingerprints against this schema's.
+/// This schema's fingerprint for the first `field_count` fields of a message,
+/// or `std::nullopt` if it does not declare that message or does not have that
+/// many fields. `field_count` counts from 1; 0 is the empty prefix and has no
+/// fingerprint because it always matches.
+inline std::optional<std::uint64_t> cyclone_prefix(std::uint32_t id, std::uint32_t field_count) {
+    const CycloneMessage* message = cyclone_message(id);
+    if (message == nullptr || field_count == 0 ||
+        static_cast<std::size_t>(field_count) > message->prefix_count) {
+        return std::nullopt;
+    }
+    return message->prefixes[field_count - 1];
+}
+
+/// What `cyclone_check_message` decided, and which field count to ask the peer
+/// about. `ask_for` is only meaningful for `CycloneMessageCheck::NeedPrefix`.
+struct CycloneMessageOutcome {
+    CycloneMessageCheck check;
+    std::uint32_t ask_for;
+};
+
+/// Compares one of the peer's messages against this schema's.
 ///
-/// `peer_messages` is the peer's `(id, fingerprint)` table - what
-/// `CYCLONE_MESSAGES` is on its side. It is only worth sending when the
-/// schema fingerprints already differ.
+/// `peer_field_count` and `peer_fingerprint` are what the peer declares for
+/// this id. This is RFC-0002 §9.1's prefix test: the two are compatible when
+/// the shorter field list is an exact prefix of the longer one, so the
+/// comparison happens at the smaller of the two field counts.
+inline CycloneMessageOutcome cyclone_check_message(std::uint32_t id,
+                                                   std::uint32_t peer_field_count,
+                                                   std::uint64_t peer_fingerprint) {
+    const CycloneMessage* known = cyclone_message(id);
+    if (known == nullptr) {
+        // Not a message this schema declares, so it is never exchanged.
+        return {CycloneMessageCheck::Match, 0};
+    }
+    const auto local_field_count = static_cast<std::uint32_t>(known->prefix_count);
+
+    if (peer_fingerprint == known->fingerprint) {
+        return {CycloneMessageCheck::Match, 0};
+    }
+    if (peer_field_count == 0 || local_field_count == 0) {
+        // The empty field list is a prefix of everything.
+        return {CycloneMessageCheck::Match, 0};
+    }
+    if (peer_field_count == local_field_count) {
+        // Same length, different content - a prefix of equal length would have
+        // to be equality, and it is not.
+        return {CycloneMessageCheck::Reject, 0};
+    }
+    if (peer_field_count < local_field_count) {
+        // The peer's own fingerprint already is the value at the shared index.
+        return {known->prefixes[peer_field_count - 1] == peer_fingerprint
+                    ? CycloneMessageCheck::Match
+                    : CycloneMessageCheck::Reject,
+                0};
+    }
+    return {CycloneMessageCheck::NeedPrefix, local_field_count};
+}
+
+/// Compares a peer's whole message table against this schema's.
+///
+/// `peer_messages` is the peer's `(id, field count, fingerprint)` table - what
+/// `CYCLONE_MESSAGES` is on its side. A `NeedMore` result means at least one
+/// message needs the extra round; walk the table with `cyclone_check_message`
+/// to find which ones.
 inline CycloneHandshake cyclone_handshake(
     std::uint64_t peer_schema_fingerprint,
     const std::vector<CyclonePeerMessage>& peer_messages) {
@@ -200,17 +310,22 @@ inline CycloneHandshake cyclone_handshake(
         return CycloneHandshake::Current;
     }
 
+    bool need_more = false;
     for (const auto& peer : peer_messages) {
-        if (const CycloneMessage* known = cyclone_message(peer.id); known != nullptr) {
-            if (known->fingerprint != peer.fingerprint) {
-                // A message both ends know, with two shapes. Every other
-                // message could match and it would still be unsafe to speak.
+        switch (cyclone_check_message(peer.id, peer.field_count, peer.fingerprint).check) {
+            case CycloneMessageCheck::Reject:
+                // One mismatch decides the whole session. Every other message
+                // could agree and it would still be unsafe to speak.
                 return CycloneHandshake::Reject;
-            }
+            case CycloneMessageCheck::NeedPrefix:
+                need_more = true;
+                break;
+            case CycloneMessageCheck::Match:
+                break;
         }
     }
 
-    return CycloneHandshake::Outdated;
+    return need_more ? CycloneHandshake::NeedMore : CycloneHandshake::Outdated;
 }
 "####;
 

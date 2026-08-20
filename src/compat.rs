@@ -198,21 +198,31 @@ fn classify(changes: &[Change], base_len: usize, head_len: usize) -> (Verdict, S
     });
     let changed_in_place = retyped || renamed;
 
-    if !removed && !changed_in_place {
-        let count = changes.len();
-        let plural = if count == 1 { "field" } else { "fields" };
-        return (
-            Verdict::Compatible,
-            format!("append-only {plural} ({count} appended at the end)"),
-        );
+    if !changed_in_place {
+        if !removed {
+            let count = changes.len();
+            let plural = if count == 1 { "field" } else { "fields" };
+            return (
+                Verdict::Compatible,
+                format!("append-only {plural} ({count} appended at the end)"),
+            );
+        }
+        if head_len < base_len && changes.len() == base_len - head_len {
+            let count = changes.len();
+            let plural = if count == 1 { "field" } else { "fields" };
+            return (
+                Verdict::Compatible,
+                format!(
+                    "{count} trailing {plural} removed; the shorter field list is still an \
+                     exact prefix of the longer one, so peers keep interoperating \
+                     (RFC-0002 §9.1)"
+                ),
+            );
+        }
     }
 
     let reason = if removed && !changed_in_place {
-        if head_len < base_len && changes.len() == base_len - head_len {
-            "field removed from the end".to_owned()
-        } else {
-            "field removed".to_owned()
-        }
+        "field removed".to_owned()
     } else if head_len > base_len {
         "field inserted; every field after it moved".to_owned()
     } else if head_len < base_len {
@@ -322,10 +332,19 @@ mod tests {
     }
 
     #[test]
-    fn removing_the_last_field_is_breaking() {
+    fn removing_a_trailing_field_is_compatible() {
         let head = &[("id", "u32"), ("x", "f32")];
-        assert_eq!(verdict(V1, head), Verdict::Breaking);
-        assert!(reason(V1, head).contains("removed from the end"));
+        assert_eq!(verdict(V1, head), Verdict::Compatible);
+        assert!(
+            reason(V1, head).contains("exact prefix"),
+            "{}",
+            reason(V1, head)
+        );
+    }
+
+    #[test]
+    fn removing_every_field_is_still_a_prefix() {
+        assert_eq!(verdict(V1, &[]), Verdict::Compatible);
     }
 
     #[test]

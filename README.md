@@ -712,25 +712,47 @@ Client  ──  CYCLONE_SCHEMA_FINGERPRINT  ──▶  Server
 | | |
 |---|---|
 | the same schema fingerprint | `CURRENT`, accept |
-| a message both ends know, with different fingerprints | `REJECT`, disconnect |
-| otherwise - each end knows messages the other does not | `OUTDATED`, accept |
+| a message both ends know, and the fields both ends carry agree | `OUTDATED`, accept |
+| a message both ends know, differing at an index both ends carry | `REJECT`, disconnect |
+| the peer carries more fields than we do, on a message that differs | `NEED_MORE`, ask once |
 
 ```rust
 match cyclone_handshake(peer_schema_fingerprint, peer_messages) {
     CycloneHandshake::Current => accept(),
-    CycloneHandshake::Outdated => accept(),   // one side is behind, safely
+    CycloneHandshake::Outdated => accept(),   // the schemas differ, safely
     CycloneHandshake::Reject => disconnect(),
+    CycloneHandshake::NeedMore => ask_the_peer(),
 }
 ```
 
-`peer_messages` is the peer's `(id, fingerprint)` table - what `CYCLONE_MESSAGES`
-is on this side. **No schema crosses the network.** Both ends have theirs
-compiled in, and sending one would invite a peer to interpret it, which is the
-runtime schema resolution Cyclone exists to not have.
+`peer_messages` is the peer's `(id, field count, fingerprint)` table - what
+`CYCLONE_MESSAGES` is on this side. **No schema crosses the network.** Both ends
+have theirs compiled in, and sending one would invite a peer to interpret it,
+which is the runtime schema resolution Cyclone exists to not have.
 
-The middle rule is the safety property, and it is the most a runtime can know:
-two peers that both speak `Player.edge` and disagree about its bytes must not
-exchange it. *How* they disagree is a build-time question, answered from two
+The safety property is that two peers who both speak `Player.edge` and disagree
+about its bytes must not exchange it - and "disagree" means RFC-0002 §9.1's
+test: the shorter field list must be an exact prefix of the longer one. Peers on
+either side of a field appended at the end **must** keep talking; RFC-0003 §8.6
+pins that as vectors V-001/V-002.
+
+Answering that needs a fingerprint per prefix, not one per message
+([`SPEC-FINGERPRINT.md` §3.5](SPEC-FINGERPRINT.md)). The chain stays compiled
+in: a peer sends its field count and its last entry, and this side reads its own
+chain at the shared index. `NEED_MORE` is the one case that cannot be settled
+that way - the peer has more fields than we do, so the deciding value sits at an
+index only the peer can produce:
+
+```rust
+if let CycloneMessageCheck::NeedPrefix(field_count) =
+    cyclone_message_check(id, peer_field_count, peer_fingerprint)
+{
+    // Ask the peer for its prefix fingerprint over its first `field_count`
+    // fields; it answers from `cyclone_prefix(id, field_count)` on its side.
+}
+```
+
+*How* two schemas disagree is still a build-time question, answered from two
 schemas by `cyclonec compat`.
 
 No frame carries a fingerprint by default - the wire's premise is that there is

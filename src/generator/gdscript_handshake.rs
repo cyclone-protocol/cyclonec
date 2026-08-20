@@ -61,6 +61,18 @@ pub fn handshake_file(
                 "const {constant}_FINGERPRINT: int = {}\n",
                 u64_literal(message.fingerprint.u64())
             ));
+            out.push_str(&format!(
+                "# One fingerprint per prefix of {}: entry k-1 covers its first k fields.\n\
+                 # The last entry is {constant}_FINGERPRINT. Never sent whole - a peer sends\n\
+                 # its field count and its last entry, and the two sides compare at min of\n\
+                 # the two counts (RFC-0002 9.1).\n",
+                message.name
+            ));
+            out.push_str(&format!("const {constant}_PREFIXES: Array = [\n"));
+            for prefix in &message.prefixes {
+                out.push_str(&format!("\t{},\n", u64_literal(prefix.u64())));
+            }
+            out.push_str("]\n");
         }
         out.push('\n');
     }
@@ -75,7 +87,8 @@ pub fn handshake_file(
     for message in &messages {
         let constant = message_constant(&message.model, &message.codec);
         out.push_str(&format!(
-            "\tCycloneMessage.new({constant}_MESSAGE_ID, {:?}, {constant}_FINGERPRINT),\n",
+            "\tCycloneMessage.new({constant}_MESSAGE_ID, {:?}, {constant}_FINGERPRINT, \
+             {constant}_PREFIXES),\n",
             message.name
         ));
     }
@@ -133,31 +146,56 @@ class CycloneMessage:
 \tvar id: int
 \tvar name: String
 \tvar fingerprint: int
+\t# One entry per field: entry k-1 covers the first k fields. The last entry
+\t# is fingerprint. Stays local; only its size and its last entry ever go on
+\t# the wire.
+\tvar prefixes: Array
 
-\tfunc _init(message_id: int, message_name: String, message_fingerprint: int) -> void:
+\tfunc _init(message_id: int, message_name: String, message_fingerprint: int, message_prefixes: Array) -> void:
 \t\tid = message_id
 \t\tname = message_name
 \t\tfingerprint = message_fingerprint
+\t\tprefixes = message_prefixes
 
-# One entry of a peer's (id, fingerprint) table - what MESSAGES is on its side.
+# One entry of a peer's (id, field count, fingerprint) table - what MESSAGES is
+# on its side.
 class CyclonePeerMessage:
 \tvar id: int
+\tvar field_count: int
 \tvar fingerprint: int
 
-\tfunc _init(message_id: int, message_fingerprint: int) -> void:
+\tfunc _init(message_id: int, message_field_count: int, message_fingerprint: int) -> void:
 \t\tid = message_id
+\t\tfield_count = message_field_count
 \t\tfingerprint = message_fingerprint
 
 # What a peer's fingerprints mean for this one.
 enum Verdict {
 \t# The same schema, exactly.
 \tCURRENT,
-\t# A different schema, but no message both ends know disagrees. One side is
-\t# older; every message they share is byte-identical.
+\t# A different schema, but every message both ends know agrees on the fields
+\t# both ends carry. Safe to proceed.
 \tOUTDATED,
-\t# A message both ends know has two different shapes. There is nothing to
-\t# negotiate: disconnect.
+\t# Both ends put different fields at an index both of them carry. There is
+\t# nothing to negotiate: disconnect.
 \tREJECT,
+\t# Not decidable from the peer's table alone - at least one message needs the
+\t# extra exchange described on MessageCheck.NEED_PREFIX.
+\tNEED_MORE,
+}
+
+# What one of the peer's messages means for this schema's message of the same id.
+enum MessageCheck {
+\t# Either this schema does not declare the message at all, or the fields both
+\t# ends carry agree. Nothing to do.
+\tMATCH,
+\t# Both ends put different fields at an index both of them carry.
+\tREJECT,
+\t# Undecidable from what the peer sent: the peer has more fields than this
+\t# schema, so the answer lives at an index only the peer can produce. Ask it
+\t# for its prefix fingerprint at the reported field count, then compare the
+\t# reply against prefix() for the same id.
+\tNEED_PREFIX,
 }
 
 ";
@@ -177,19 +215,65 @@ static func message_by_id(id: int) -> CycloneMessage:
 		return MESSAGES[low]
 	return null
 
-# Compares a peer's fingerprints against this schema's. peer_messages is only
-# worth sending when the schema fingerprints already differ.
+# This schema's fingerprint for the first field_count fields of a message, or
+# -1 if it does not declare that message or does not have that many fields.
+# field_count counts from 1; 0 is the empty prefix and has no fingerprint
+# because it always matches.
+static func prefix(id: int, field_count: int) -> int:
+	var message := message_by_id(id)
+	if message == null or field_count <= 0 or field_count > message.prefixes.size():
+		return -1
+	return message.prefixes[field_count - 1]
+
+# Compares one of the peer's messages against this schema's. Returns
+# [check, ask_for]; ask_for is the field count to ask the peer about, and is
+# only meaningful for MessageCheck.NEED_PREFIX.
+#
+# This is RFC-0002 9.1's prefix test: the two are compatible when the shorter
+# field list is an exact prefix of the longer one, so the comparison happens at
+# the smaller of the two field counts.
+static func check_message(id: int, peer_field_count: int, peer_fingerprint: int) -> Array:
+	var known := message_by_id(id)
+	if known == null:
+		# Not a message this schema declares, so it is never exchanged.
+		return [MessageCheck.MATCH, 0]
+	var local_field_count := known.prefixes.size()
+
+	if peer_fingerprint == known.fingerprint:
+		return [MessageCheck.MATCH, 0]
+	if peer_field_count == 0 or local_field_count == 0:
+		# The empty field list is a prefix of everything.
+		return [MessageCheck.MATCH, 0]
+	if peer_field_count == local_field_count:
+		# Same length, different content - a prefix of equal length would have
+		# to be equality, and it is not.
+		return [MessageCheck.REJECT, 0]
+	if peer_field_count < local_field_count:
+		# The peer's own fingerprint already is the value at the shared index.
+		if known.prefixes[peer_field_count - 1] == peer_fingerprint:
+			return [MessageCheck.MATCH, 0]
+		return [MessageCheck.REJECT, 0]
+	return [MessageCheck.NEED_PREFIX, local_field_count]
+
+# Compares a peer's whole message table against this schema's. A NEED_MORE
+# result means at least one message needs the extra round; walk the table with
+# check_message() to find which ones.
 static func compare(peer_schema_fingerprint: int, peer_messages: Array) -> Verdict:
 	if peer_schema_fingerprint == SCHEMA_FINGERPRINT:
 		return Verdict.CURRENT
 
+	var need_more := false
 	for peer in peer_messages:
-		var known := message_by_id(peer.id)
-		if known != null and known.fingerprint != peer.fingerprint:
-			# A message both ends know, with two shapes. Every other message
-			# could match and it would still be unsafe to speak.
+		var outcome := check_message(peer.id, peer.field_count, peer.fingerprint)
+		if outcome[0] == MessageCheck.REJECT:
+			# One mismatch decides the whole session. Every other message could
+			# agree and it would still be unsafe to speak.
 			return Verdict.REJECT
+		if outcome[0] == MessageCheck.NEED_PREFIX:
+			need_more = true
 
+	if need_more:
+		return Verdict.NEED_MORE
 	return Verdict.OUTDATED
 "####;
 

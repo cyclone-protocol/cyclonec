@@ -101,7 +101,7 @@
     {
       "path": "src/generated/handshake.ts",
       "kind": "handshake",
-      "sha256": "31a61e4ac082704b088ac65c5a4a64266da517f9901c803cbfab95c3da764170"
+      "sha256": "e86f82fd23fc1071adb975fd377f455f28a3e9c3c88c4c65527c8fff8c740798"
     }
   ]
 }
