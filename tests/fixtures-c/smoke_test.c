@@ -113,6 +113,7 @@ int main(void) {
 
     CyclonePeerMessage outdated_peer[1];
     outdated_peer[0].id = PLAYER_EDGE_MESSAGE_ID;
+    outdated_peer[0].field_count = (uint32_t)PLAYER_EDGE_PREFIX_COUNT;
     outdated_peer[0].fingerprint = PLAYER_EDGE_FINGERPRINT;
     CycloneHandshake outdated =
         cyclone_handshake(CYCLONE_SCHEMA_FINGERPRINT + 1, outdated_peer, 1);
@@ -120,6 +121,7 @@ int main(void) {
 
     CyclonePeerMessage reject_peer[1];
     reject_peer[0].id = PLAYER_EDGE_MESSAGE_ID;
+    reject_peer[0].field_count = (uint32_t)PLAYER_EDGE_PREFIX_COUNT;
     reject_peer[0].fingerprint = PLAYER_EDGE_FINGERPRINT + 1;
     CycloneHandshake reject = cyclone_handshake(CYCLONE_SCHEMA_FINGERPRINT + 1, reject_peer, 1);
     assert(reject == CYCLONE_HANDSHAKE_REJECT);

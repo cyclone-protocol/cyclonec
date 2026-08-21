@@ -66,14 +66,18 @@ int main() {
     CycloneHandshake current = cyclone_handshake(CYCLONE_SCHEMA_FINGERPRINT, {});
     assert(current == CycloneHandshake::Current);
 
-    CycloneHandshake outdated = cyclone_handshake(
-        CYCLONE_SCHEMA_FINGERPRINT + 1,
-        {CyclonePeerMessage{PLAYER_EDGE_MESSAGE_ID, PLAYER_EDGE_FINGERPRINT}});
+    const auto player_edge_field_count = static_cast<std::uint32_t>(PLAYER_EDGE_PREFIX_COUNT);
+
+    CycloneHandshake outdated =
+        cyclone_handshake(CYCLONE_SCHEMA_FINGERPRINT + 1,
+                          {CyclonePeerMessage{PLAYER_EDGE_MESSAGE_ID, player_edge_field_count,
+                                              PLAYER_EDGE_FINGERPRINT}});
     assert(outdated == CycloneHandshake::Outdated);
 
-    CycloneHandshake reject = cyclone_handshake(
-        CYCLONE_SCHEMA_FINGERPRINT + 1,
-        {CyclonePeerMessage{PLAYER_EDGE_MESSAGE_ID, PLAYER_EDGE_FINGERPRINT + 1}});
+    CycloneHandshake reject =
+        cyclone_handshake(CYCLONE_SCHEMA_FINGERPRINT + 1,
+                          {CyclonePeerMessage{PLAYER_EDGE_MESSAGE_ID, player_edge_field_count,
+                                              PLAYER_EDGE_FINGERPRINT + 1}});
     assert(reject == CycloneHandshake::Reject);
 
     std::puts("cpp fixture smoke test: ok");

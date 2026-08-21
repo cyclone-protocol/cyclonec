@@ -176,13 +176,19 @@ function encode(value, fn) {
     assert.equal(PlayerEdgeCodec.MESSAGE_ID, PLAYER_EDGE_MESSAGE_ID);
     assert.equal(PlayerEdgeCodec.FINGERPRINT, PLAYER_EDGE_FINGERPRINT);
 
-    const peer = CYCLONE_MESSAGES.map((message) => [message.id, message.fingerprint]);
+    const peer = CYCLONE_MESSAGES.map((message) => [
+        message.id,
+        message.prefixes.length,
+        message.fingerprint,
+    ]);
     assert.equal(cycloneHandshake(CYCLONE_SCHEMA_FINGERPRINT, peer), CycloneHandshake.CURRENT);
     assert.notEqual(cycloneMessage(PLAYER_EDGE_MESSAGE_ID), undefined);
     assert.equal(cycloneMessage(0), undefined);
 
-    const rejected = peer.map(([id, fingerprint]) =>
-        id === PLAYER_EDGE_MESSAGE_ID ? [id, fingerprint ^ 1n] : [id, fingerprint],
+    const rejected = peer.map(([id, fieldCount, fingerprint]) =>
+        id === PLAYER_EDGE_MESSAGE_ID
+            ? [id, fieldCount, fingerprint ^ 1n]
+            : [id, fieldCount, fingerprint],
     );
     assert.equal(cycloneHandshake(0xdeadbeef_00000000n, rejected), CycloneHandshake.REJECT);
 }

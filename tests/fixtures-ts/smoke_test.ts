@@ -181,13 +181,17 @@ function encode<T>(value: T, fn: (writer: Writer, value: T) => void): Uint8Array
     assert.equal(PlayerEdgeCodec.MESSAGE_ID, PLAYER_EDGE_MESSAGE_ID);
     assert.equal(PlayerEdgeCodec.FINGERPRINT, PLAYER_EDGE_FINGERPRINT);
 
-    const peer = CYCLONE_MESSAGES.map((message) => [message.id, message.fingerprint] as const);
+    const peer = CYCLONE_MESSAGES.map(
+        (message) => [message.id, message.prefixes.length, message.fingerprint] as const,
+    );
     assert.equal(cycloneHandshake(CYCLONE_SCHEMA_FINGERPRINT, peer), CycloneHandshake.Current);
     assert.notEqual(cycloneMessage(0), undefined === cycloneMessage(0));
     assert.equal(cycloneMessage(0x00000000), undefined);
 
-    const rejected: (readonly [number, bigint])[] = peer.map(([id, fingerprint]) =>
-        id === PLAYER_EDGE_MESSAGE_ID ? ([id, fingerprint ^ 1n] as const) : ([id, fingerprint] as const),
+    const rejected: (readonly [number, number, bigint])[] = peer.map(([id, fieldCount, fingerprint]) =>
+        id === PLAYER_EDGE_MESSAGE_ID
+            ? ([id, fieldCount, fingerprint ^ 1n] as const)
+            : ([id, fieldCount, fingerprint] as const),
     );
     assert.equal(
         cycloneHandshake(0xdeadbeef_00000000n, rejected),
